@@ -65,11 +65,11 @@ This could not be an MCP server sitting behind an API, and it is worth being pre
 
 | State | Registered tools |
 |---|---|
-| Normal editing | 25 |
-| Something selected on the canvas | 26 — an `edit_selection` tool appears, scoped to that entity |
+| Normal editing | 26 |
+| Something selected on the canvas | 27 — an `edit_selection` tool appears, scoped to that entity |
 | Findings outstanding | `fix_violation` appears, with the live rule ids as its enum |
-| **Review mode** | 11 — every mutating tool is unregistered; the agent can look but not touch |
-| **A proposal awaiting approval** | 13 — writes withdrawn, `check_proposal` added, so edits cannot queue up behind a decision the user has not made |
+| **Review mode** | 12 — every mutating tool is unregistered; the agent can look but not touch |
+| **A proposal awaiting approval** | 14 — writes withdrawn, `check_proposal` added, so edits cannot queue up behind a decision the user has not made |
 
 That last row has one deliberate exception, and it is the subtlest thing in the codebase: the tool whose call is *currently blocked on the approval* stays registered. Unregistering a tool aborts its running invocation, so withdrawing it would kill the very call waiting for the user's answer. `ToolHost.sync` takes a `keepAlive` list for exactly this.
 
@@ -90,9 +90,34 @@ Run it twice on the same flat and the point makes itself:
 
 Same door. Same drawing. The difference is 100 mm, and until you see a disc the size of a wheelchair fail to fit through it, it is just a number in a table.
 
+`compare_standards` makes the same point in one line, for the question people actually ask — *would this work for my mother?*
+
+```
+This home works up to 700 mm. At 900 mm, Bathroom becomes unreachable
+— 800 mm at the door between Bathroom and Hall.
+
+  a walking frame        700 mm   88% reachable   nothing cut off
+  a standard wheelchair  900 mm   68% reachable   Bathroom cut off
+  a large powered chair 1000 mm   30% reachable   five rooms cut off
+```
+
+## A whole home, from one sentence and one approval
+
+> *Design me a one-bedroom flat for a wheelchair user.*
+
+The agent calls `apply_batch` once with twenty-odd operations: five rooms placed against each other, a front door, an archway, three internal doors, three windows, and every room furnished. You see the whole thing drawn in violet before any of it exists, and approve it once.
+
+<img src="docs/agent-designed-flat.svg" alt="A one-bedroom flat designed by an agent: 58 m², 98% step-free reachable, scoring 100" width="620">
+
+**58 m², 98% step-free reachable, zero errors, zero warnings, 100/100.** The only remark left is an advisory that the kitchen work triangle is a little stretched.
+
+That drawing is not a hand-made sample. `npm run docs:render` produces it by replaying the agent's exact tool calls through the same dispatcher the live tools use, and `tests/design.test.ts` asserts the result still scores 100 — so if the placement rules ever regress, the build says so.
+
+Getting there meant fixing the automatic furniture placer, which used to cheerfully park a wardrobe across a doorway and a fridge facing a worktop. It now rules out anything the checker would object to — doorways, door swings, other people's clear floor — and among what is left, picks the position with the most space around it.
+
 ## The tool surface
 
-24 base tools plus contextual ones. All lengths are millimetres; every reference resolves by id, exact name, partial name or room type, so `"bathroom"`, `"Bathroom"` and `r3` all work.
+25 base tools plus contextual ones. All lengths are millimetres; every reference resolves by id, exact name, partial name or room type, so `"bathroom"`, `"Bathroom"` and `r3` all work.
 
 ### Reading
 
@@ -101,6 +126,7 @@ Same door. Same drawing. The difference is 100 mm, and until you see a disc the 
 | `get_plan` | Every room with position, size, area, neighbours and external walls; every opening; every item of furniture |
 | `check_plan` | All rule findings, each with `measured`, `required`, `unit`, the entities involved and a `fix` phrased as a tool call |
 | `analyse_access` | Step-free reachable area, per-room verdicts, every doorway's clear width, and **the width and identity of the tightest point on the route into each room** |
+| `compare_standards` | The same home measured against several bodies at once — a walking frame, a standard wheelchair, a large powered chair — and what each one can reach |
 | `measure` | Distance between any two things — or literal `"x,y"` points — plus the clear floor radius at each end |
 | `list_catalog` | Real furniture dimensions and the clear floor each item needs in front of it |
 | `get_selection` | What the user has selected right now, so "this room" and "that door" resolve |
@@ -206,7 +232,7 @@ npm install && npm run dev
 Then open <http://localhost:5173>.
 
 ```bash
-npm test          # 130 tests: geometry, occupancy, routing, rules, tools, exports, fuzzing
+npm test          # 138 tests: geometry, occupancy, routing, rules, tools, exports, fuzzing
 npm run build     # type-check and bundle to dist/ — a static site, no backend
 npm run docs:render   # regenerate the drawings in docs/
 ```
@@ -230,7 +256,9 @@ Things worth asking for:
 
 > I'm selecting the second bedroom — can a double bed and a wardrobe fit with a turning circle?
 
-> Load the empty shell and design a one-bedroom flat for a wheelchair user, then send me a link.
+> Design me a one-bedroom flat for a wheelchair user, then send me a link.
+
+> Would this flat work for my mother? She uses a walking frame now but may need a chair later.
 
 Without WebMCP support the app is an ordinary, complete floor plan editor. That progressive-enhancement contract is deliberate.
 
@@ -259,13 +287,15 @@ src/
   ui/
     canvas.ts     The drawing sheet, direct manipulation, keyboard control, ghost previews
     app.ts        Header, findings, activity, tool inspector, approval card, exports
-tests/            130 tests. Beyond the unit tests, tools.test.ts drives every
+tests/            138 tests. Beyond the unit tests, tools.test.ts drives every
                   tool the way an agent would — valid arguments, nonsense
                   arguments, and the consent gate — and robustness.test.ts throws
                   sixty randomly generated plans plus a set of deliberately
                   degenerate ones at the engine to check it never crashes, never
                   produces a NaN, and never points a finding at something that
-                  does not exist
+                  does not exist. design.test.ts plays the whole "design me a
+                  flat" conversation through the real operations and holds the
+                  result to 100/100
 ```
 
 No framework, no backend, no telemetry. TypeScript in strict mode, built with Vite.

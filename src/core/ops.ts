@@ -11,9 +11,13 @@ import { CATALOG, CATALOG_BY_TYPE, ROOM_TYPES } from './catalog';
 import {
   OPPOSITE,
   SIDES,
+  approachRect,
   clamp,
+  doorSwingRect,
   furnitureRect,
+  openingRect,
   overlapRect,
+  rectArea,
   rectsOverlap,
   roomRect,
   snapMm,
@@ -493,8 +497,17 @@ function suggest(query: string): string[] {
 }
 
 /**
- * Greedy wall placement: walk each wall, back the item against it facing into
- * the room, and take the first position that clears the existing furniture.
+ * Wall placement that respects the things the rule engine will check.
+ *
+ * The naive version — walk each wall, take the first gap — cheerfully parked a
+ * wardrobe across a doorway and a fridge facing a worktop, so `furnish_room`
+ * produced rooms that failed inspection the moment they were furnished. This
+ * one rules out anything the checker would object to, then picks the候 position
+ * that leaves the most space around it.
+ *
+ * If nothing satisfies the full set, it relaxes the clear-floor requirement and
+ * tries again: a bookshelf somewhere imperfect is more useful than no bookshelf
+ * and an error message.
  */
 function findSpot(
   plan: Plan,
@@ -502,42 +515,121 @@ function findSpot(
   item: Furniture,
   preferSide?: Side,
 ): { cx: number; cy: number; rot: 0 | 90 | 180 | 270 } | null {
-  const sides = preferSide ? [preferSide, ...SIDES.filter((s) => s !== preferSide)] : SIDES;
+  const strict = searchSpot(plan, room, item, preferSide, true);
+  return strict ?? searchSpot(plan, room, item, preferSide, false);
+}
+
+function searchSpot(
+  plan: Plan,
+  room: Room,
+  item: Furniture,
+  preferSide: Side | undefined,
+  respectApproach: boolean,
+): { cx: number; cy: number; rot: 0 | 90 | 180 | 270 } | null {
+  const sides = preferSide ? [preferSide, ...SIDES.filter((x) => x !== preferSide)] : SIDES;
   const others = plan.furniture.filter((f) => rectsOverlap(furnitureRect(f), roomRect(room), 1));
   const step = 100;
+  const shell = roomRect(room);
 
-  for (const side of sides) {
+  // Doorways that open into this room, plus the arcs their leaves sweep. Both
+  // have to stay clear or the room fails the moment it is furnished.
+  const keepClear: Rect[] = [];
+  for (const op of plan.openings) {
+    const hole = openingRect(plan, op);
+    if (hole && rectsOverlap(hole, shell, 1) && op.kind !== 'window') {
+      keepClear.push(padAlongWall(hole, op.side, 150));
+    }
+    const swing = doorSwingRect(plan, op);
+    if (swing && rectsOverlap(swing, shell, 1)) keepClear.push(swing);
+  }
+
+  let best: { cx: number; cy: number; rot: 0 | 90 | 180 | 270; score: number } | null = null;
+
+  for (const [rank, side] of sides.entries()) {
     // Facing into the room from this wall: rot 0 faces south, clockwise from there.
     const rot: 0 | 90 | 180 | 270 =
       side === 'n' ? 0 : side === 'e' ? 90 : side === 's' ? 180 : 270;
     const probe: Furniture = { ...item, rot };
     const box = furnitureRect({ ...probe, cx: 0, cy: 0 });
-    const bw = box.w;
-    const bh = box.h;
-    if (bw > room.w || bh > room.h) continue;
+    if (box.w > room.w || box.h > room.h) continue;
 
-    const along = side === 'n' || side === 's' ? room.w - bw : room.h - bh;
+    const along = side === 'n' || side === 's' ? room.w - box.w : room.h - box.h;
     for (let t = 0; t <= along; t += step) {
       const cx =
         side === 'n' || side === 's'
-          ? room.x + t + bw / 2
+          ? room.x + t + box.w / 2
           : side === 'w'
-            ? room.x + bw / 2
-            : room.x + room.w - bw / 2;
+            ? room.x + box.w / 2
+            : room.x + room.w - box.w / 2;
       const cy =
         side === 'w' || side === 'e'
-          ? room.y + t + bh / 2
+          ? room.y + t + box.h / 2
           : side === 'n'
-            ? room.y + bh / 2
-            : room.y + room.h - bh / 2;
-      const candidate = { ...probe, cx, cy };
+            ? room.y + box.h / 2
+            : room.y + room.h - box.h / 2;
+
+      const candidate: Furniture = { ...probe, cx, cy };
       const rect = furnitureRect(candidate);
+
       if (others.some((o) => rectsOverlap(rect, furnitureRect(o), 1))) continue;
-      // Keep the approach zone inside the room where we can.
-      return { cx: snapMm(cx), cy: snapMm(cy), rot };
+      if (keepClear.some((r) => rectsOverlap(rect, r, 1))) continue;
+      // Do not stand in the clear floor another fitting needs.
+      if (others.some((o) => zoneBlockedBy(o, rect))) continue;
+
+      const zone = approachRect(candidate);
+      if (respectApproach && zone) {
+        if (!containsRect(shell, zone)) continue;
+        if (others.some((o) => blocksZone(zone, o))) continue;
+      }
+
+      const clearance = others.length
+        ? Math.min(...others.map((o) => gapBetween(rect, furnitureRect(o))))
+        : Number.MAX_SAFE_INTEGER;
+      const score = Math.min(clearance, 4000) - rank * 40;
+      if (!best || score > best.score) best = { cx: snapMm(cx), cy: snapMm(cy), rot, score };
     }
   }
-  return null;
+
+  return best ? { cx: best.cx, cy: best.cy, rot: best.rot } : null;
+}
+
+/** Widens a doorway rectangle along its wall, so nothing lands on the jamb. */
+function padAlongWall(r: Rect, side: Side, amount: number): Rect {
+  return side === 'n' || side === 's'
+    ? { x: r.x - amount, y: r.y, w: r.w + amount * 2, h: r.h }
+    : { x: r.x, y: r.y - amount, w: r.w, h: r.h + amount * 2 };
+}
+
+function containsRect(outer: Rect, inner: Rect): boolean {
+  return (
+    inner.x >= outer.x - 1 &&
+    inner.y >= outer.y - 1 &&
+    inner.x + inner.w <= outer.x + outer.w + 1 &&
+    inner.y + inner.h <= outer.y + outer.h + 1
+  );
+}
+
+/** True when `intruder` takes enough of `zone` to count as being in the way. */
+function blocksZone(zone: Rect, other: Furniture): boolean {
+  if (CATALOG_BY_TYPE.get(other.type)?.blocksApproach === false) return false;
+  const ov = overlapRect(zone, furnitureRect(other));
+  return ov !== null && rectArea(ov) / rectArea(zone) > 0.2;
+}
+
+/** True when a new footprint would stand in the clear floor `owner` needs. */
+function zoneBlockedBy(owner: Furniture, incoming: Rect): boolean {
+  if (CATALOG_BY_TYPE.get(owner.type)?.blocksApproach === false) return false;
+  const zone = approachRect(owner);
+  if (!zone) return false;
+  const ov = overlapRect(zone, incoming);
+  return ov !== null && rectArea(ov) / rectArea(zone) > 0.2;
+}
+
+/** Shortest gap between two rectangles, 0 when they touch or overlap. */
+function gapBetween(a: Rect, b: Rect): number {
+  const dx = Math.max(0, Math.max(b.x - (a.x + a.w), a.x - (b.x + b.w)));
+  const dy = Math.max(0, Math.max(b.y - (a.y + a.h), a.y - (b.y + b.h)));
+  return Math.hypot(dx, dy);
 }
 
 export function moveFurniture(plan: Plan, ref: string, xMm: number, yMm: number): OpResult<Furniture> {

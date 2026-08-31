@@ -157,6 +157,16 @@ async function mutate(tool: string, run: Runner, opts: MutateOptions = {}): Prom
   });
 }
 
+/** Puts a familiar name to a body width, so results read like sentences. */
+function describeBody(diameterMm: number): string {
+  if (diameterMm <= 650) return 'a walking stick or crutches';
+  if (diameterMm <= 750) return 'a walking frame';
+  if (diameterMm <= 850) return 'a narrow manual wheelchair';
+  if (diameterMm <= 950) return 'a standard wheelchair';
+  if (diameterMm <= 1100) return 'a large powered chair';
+  return 'a mobility scooter';
+}
+
 // ── Read-only projections ────────────────────────────────────────────────────
 
 function planForAgent(plan: Plan) {
@@ -356,6 +366,67 @@ function readTools(): ToolSpec[] {
             .slice(0, 3)
             .map((r) => `${r.name}: ${r.routeWidthMm} mm at ${r.routeLimit ?? 'an unidentified pinch'}`),
         });
+      },
+    },
+
+    {
+      name: 'compare_standards',
+      description:
+        'Measure the same home against several different bodies at once — a walking frame, a standard wheelchair, a large powered chair — and report what each one can reach and what stops it. This is the tool for "would this flat work for my mother?", and for separating how much of a problem is the home from how much is the chair.',
+      annotations: { title: 'Compare mobility standards', readOnlyHint: true },
+      inputSchema: obj({
+        diameters_mm: {
+          type: 'array',
+          items: { type: 'number' },
+          description:
+            'Body widths to test, mm. Defaults to 700, 900 and 1000 — a walking frame, the standard reference wheelchair, and a large powered chair.',
+        },
+      }),
+      execute: (args) => {
+        const plan = store.plan;
+        const requested = Array.isArray(args.diameters_mm)
+          ? (args.diameters_mm as unknown[])
+              .map((d) => Math.round(Number(d)))
+              .filter((d) => Number.isFinite(d) && d >= 400 && d <= 1800)
+          : [];
+        const diameters = (requested.length ? requested : [700, 900, 1000]).sort((a, b) => a - b);
+
+        const results = diameters.map((diameter) => {
+          const variant: Plan = {
+            ...plan,
+            settings: { ...plan.settings, mobilityRadius: Math.round(diameter / 2) },
+          };
+          const a = analyse(variant);
+          const cutOff = a.rooms.filter((r) => r.reachRatio < 0.05);
+          const tightest = [...a.rooms]
+            .filter((r) => r.routeWidthMm > 0)
+            .sort((x, y) => x.routeWidthMm - y.routeWidthMm)[0];
+          return {
+            body: describeBody(diameter),
+            diameter_mm: diameter,
+            reachable_percent: Math.round(a.stats.reachableRatio * 100),
+            reachable_area_m2: a.stats.reachableAreaM2,
+            rooms_cut_off: cutOff.map((r) => r.name),
+            tightest_route: tightest
+              ? `${tightest.name}: ${tightest.routeWidthMm} mm at ${tightest.routeLimit ?? 'an unidentified pinch'}`
+              : null,
+            doors_too_narrow: a.violations.filter((v) => v.rule === 'door.clear_width').length,
+          };
+        });
+
+        note('compare_standards', results.map((r) => `${r.diameter_mm} mm: ${r.reachable_percent}%`).join(', '));
+
+        // The interesting line is where it stops working.
+        const works = results.filter((r) => r.rooms_cut_off.length === 0);
+        const fails = results.filter((r) => r.rooms_cut_off.length > 0);
+        const summary =
+          fails.length === 0
+            ? `Every body tested (${diameters.join(', ')} mm) reaches every room.`
+            : works.length === 0
+              ? `No body tested reaches the whole home. Even at ${diameters[0]} mm, ${fails[0]!.rooms_cut_off.join(' and ')} ${fails[0]!.rooms_cut_off.length === 1 ? 'is' : 'are'} cut off.`
+              : `This home works up to ${works[works.length - 1]!.diameter_mm} mm. At ${fails[0]!.diameter_mm} mm, ${fails[0]!.rooms_cut_off.join(' and ')} ${fails[0]!.rooms_cut_off.length === 1 ? 'becomes' : 'become'} unreachable — ${fails[0]!.tightest_route}.`;
+
+        return reply({ ok: true, summary, standards: results });
       },
     },
 

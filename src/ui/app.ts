@@ -372,22 +372,34 @@ function issuesPanel(): HTMLElement {
 
 function issueCard(v: Violation): HTMLElement {
   const unitLabel = v.unit === 'm2' ? ' m²' : v.unit === 'mm' ? ' mm' : v.unit === 'ratio' ? '%' : '';
+  const focusEntity = () => {
+    const first = v.entities[0];
+    if (!first) return;
+    const kind = findRoom(store.plan, first)
+      ? 'room'
+      : findFurniture(store.plan, first)
+        ? 'furniture'
+        : findOpening(store.plan, first)
+          ? 'opening'
+          : null;
+    if (kind) store.select({ kind, id: first });
+  };
+
   return h(
     'article',
     {
       class: `issue ${v.severity}`,
-      onclick: () => {
-        const first = v.entities[0];
-        if (!first) return;
-        const kind = findRoom(store.plan, first)
-          ? 'room'
-          : findFurniture(store.plan, first)
-            ? 'furniture'
-            : findOpening(store.plan, first)
-              ? 'opening'
-              : null;
-        if (kind) store.select({ kind, id: first });
+      // A findings list you can only reach with a mouse would be a poor look on
+      // a tool about accessible design.
+      role: 'button',
+      tabindex: '0',
+      'aria-label': `${v.severity}: ${v.title}. ${v.detail}`,
+      onkeydown: (e: KeyboardEvent) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        focusEntity();
       },
+      onclick: focusEntity,
     },
     h(
       'header',

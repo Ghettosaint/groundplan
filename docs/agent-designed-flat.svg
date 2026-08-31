@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1200 -5600 10000 13100" width="1000" height="1310" font-family="system-ui, sans-serif">
+<title>Designed by an agent, approved once</title>
+<rect x="-1200" y="-5600" width="10000" height="13100" fill="#fbfaf7"/>
+<rect x="0" y="0" width="7600" height="1600" fill="#eeeae4"/>
+<rect x="0" y="-4400" width="4400" height="4400" fill="#e8efe6"/>
+<rect x="4400" y="-4400" width="3200" height="4400" fill="#f3ecdf"/>
+<rect x="0" y="1600" width="4400" height="3800" fill="#e6eaf2"/>
+<rect x="4400" y="1600" width="3200" height="3800" fill="#e3eef1"/>
+<rect x="0" y="-50" width="1300" height="100" fill="#2a2823"/>
+<rect x="3100" y="-50" width="1300" height="100" fill="#2a2823"/>
+<rect x="4400" y="-50" width="1100" height="100" fill="#2a2823"/>
+<rect x="6500" y="-50" width="1100" height="100" fill="#2a2823"/>
+<rect x="7475" y="0" width="250" height="1600" fill="#2a2823"/>
+<rect x="0" y="1550" width="1700" height="100" fill="#2a2823"/>
+<rect x="2700" y="1550" width="1700" height="100" fill="#2a2823"/>
+<rect x="4400" y="1550" width="1100" height="100" fill="#2a2823"/>
+<rect x="6500" y="1550" width="1100" height="100" fill="#2a2823"/>
+<rect x="-125" y="0" width="250" height="300" fill="#2a2823"/>
+<rect x="-125" y="1300" width="250" height="300" fill="#2a2823"/>
+<rect x="0" y="-4525" width="1000" height="250" fill="#2a2823"/>
+<rect x="3400" y="-4525" width="1000" height="250" fill="#2a2823"/>
+<rect x="4350" y="-4400" width="100" height="4400" fill="#2a2823"/>
+<rect x="-125" y="-4400" width="250" height="4400" fill="#2a2823"/>
+<rect x="4400" y="-4525" width="800" height="250" fill="#2a2823"/>
+<rect x="6800" y="-4525" width="800" height="250" fill="#2a2823"/>
+<rect x="7475" y="-4400" width="250" height="4400" fill="#2a2823"/>
+<rect x="4350" y="1600" width="100" height="3800" fill="#2a2823"/>
+<rect x="0" y="5275" width="1000" height="250" fill="#2a2823"/>
+<rect x="3400" y="5275" width="1000" height="250" fill="#2a2823"/>
+<rect x="-125" y="1600" width="250" height="3800" fill="#2a2823"/>
+<rect x="7475" y="1600" width="250" height="3800" fill="#2a2823"/>
+<rect x="4400" y="5275" width="3200" height="250" fill="#2a2823"/>
+<path d="M 0 1300 A 1000 1000 0 0 0 1000 300" fill="none" stroke="rgba(64,60,51,0.4)" stroke-width="18"/>
+<line x1="0" y1="300" x2="1000" y2="300" stroke="rgba(64,60,51,0.4)" stroke-width="18"/>
+<path d="M 6500 0 A 1000 1000 0 0 0 5500 -1000" fill="none" stroke="rgba(64,60,51,0.4)" stroke-width="18"/>
+<line x1="5500" y1="0" x2="5500" y2="-1000" stroke="rgba(64,60,51,0.4)" stroke-width="18"/>
+<path d="M 2700 1600 A 1000 1000 0 0 1 1700 2600" fill="none" stroke="rgba(64,60,51,0.4)" stroke-width="18"/>
+<line x1="1700" y1="1600" x2="1700" y2="2600" stroke="rgba(64,60,51,0.4)" stroke-width="18"/>
+<path d="M 6500 1600 A 1000 1000 0 0 1 5500 2600" fill="none" stroke="rgba(64,60,51,0.4)" stroke-width="18"/>
+<line x1="5500" y1="1600" x2="5500" y2="2600" stroke="rgba(64,60,51,0.4)" stroke-width="18"/>
+<rect x="1000" y="-4525" width="2400" height="250" fill="#cfd9de"/>
+<line x1="1000" y1="-4400" x2="3400" y2="-4400" stroke="#5d7480" stroke-width="22"/>
+<rect x="5200" y="-4525" width="1600" height="250" fill="#cfd9de"/>
+<line x1="5200" y1="-4400" x2="6800" y2="-4400" stroke="#5d7480" stroke-width="22"/>
+<rect x="1000" y="5275" width="2400" height="250" fill="#cfd9de"/>
+<line x1="1000" y1="5400" x2="3400" y2="5400" stroke="#5d7480" stroke-width="22"/>
+<rect x="0" y="-4400" width="2100" height="900" fill="#f2ece1" stroke="#6f6a5d" stroke-width="16" rx="60"/>
+<text x="1050" y="-3895" font-size="150" fill="#8b8577" text-anchor="middle">3-seat sofa</text>
+<rect x="3300" y="-600" width="1100" height="600" fill="#f2ece1" stroke="#6f6a5d" stroke-width="16" rx="60"/>
+<text x="3850" y="-245" font-size="150" fill="#8b8577" text-anchor="middle">Coffee table</text>
+<rect x="5" y="-845" width="850" height="850" fill="#f2ece1" stroke="#6f6a5d" stroke-width="16" rx="60"/>
+<text x="430" y="-365" font-size="150" fill="#8b8577" text-anchor="middle">Armchair</text>
+<rect x="4080" y="-4400" width="320" height="900" fill="#f2ece1" stroke="#6f6a5d" stroke-width="16" rx="60"/>
+<text x="4240" y="-3895" font-size="150" fill="#8b8577" text-anchor="middle">Bookshelf</text>
+<rect x="4400" y="-4395" width="2400" height="650" fill="#dfe7ea" stroke="#6f6a5d" stroke-width="16" rx="60"/>
+<text x="5600" y="-4015" font-size="150" fill="#8b8577" text-anchor="middle">Counter run</text>
+<rect x="6900" y="-700" width="700" height="700" fill="#dfe7ea" stroke="#6f6a5d" stroke-width="16" rx="60"/>
+<text x="7250" y="-295" font-size="150" fill="#8b8577" text-anchor="middle">Fridge</text>
+<rect x="4400" y="-645" width="600" height="650" fill="#dfe7ea" stroke="#6f6a5d" stroke-width="16" rx="60"/>
+<text x="4700" y="-265" font-size="150" fill="#8b8577" text-anchor="middle">Oven / hob</text>
+<rect x="6955" y="-2600" width="650" height="800" fill="#dfe7ea" stroke="#6f6a5d" stroke-width="16" rx="60"/>
+<text x="7280" y="-2145" font-size="150" fill="#8b8577" text-anchor="middle">Kitchen sink</text>
+<rect x="0" y="1600" width="1400" height="2000" fill="#f2ece1" stroke="#6f6a5d" stroke-width="16" rx="60"/>
+<text x="700" y="2655" font-size="150" fill="#8b8577" text-anchor="middle">Double bed</text>
+<rect x="3800" y="4200" width="600" height="1200" fill="#f2ece1" stroke="#6f6a5d" stroke-width="16" rx="60"/>
+<text x="4100" y="4855" font-size="150" fill="#8b8577" text-anchor="middle">Wardrobe</text>
+<rect x="3605" y="1600" width="450" height="400" fill="#f2ece1" stroke="#6f6a5d" stroke-width="16" rx="60"/>
+<text x="3830" y="1855" font-size="150" fill="#8b8577" text-anchor="middle">Bedside table</text>
+<rect x="4400" y="1600" width="400" height="700" fill="#dfe7ea" stroke="#6f6a5d" stroke-width="16" rx="60"/>
+<text x="4600" y="2005" font-size="150" fill="#8b8577" text-anchor="middle">WC</text>
+<rect x="7155" y="4800" width="450" height="600" fill="#dfe7ea" stroke="#6f6a5d" stroke-width="16" rx="60"/>
+<text x="7380" y="5155" font-size="150" fill="#8b8577" text-anchor="middle">Basin</text>
+<rect x="6700" y="1600" width="900" height="900" fill="#dfe7ea" stroke="#6f6a5d" stroke-width="16" rx="60"/>
+<text x="7150" y="2105" font-size="150" fill="#8b8577" text-anchor="middle">Shower</text>
+<text x="2175" y="585" font-size="220" font-weight="600" fill="#403c33" text-anchor="middle">HALL</text>
+<text x="2175" y="855" font-size="190" fill="#8b8577" text-anchor="middle">12.2 m²</text>
+<text x="2175" y="1075" font-size="150" fill="#8b8577" text-anchor="middle">2147 mm turn · 99%</text>
+<text x="2225" y="-1865" font-size="220" font-weight="600" fill="#403c33" text-anchor="middle">LIVING ROOM</text>
+<text x="2225" y="-1595" font-size="190" fill="#8b8577" text-anchor="middle">19.4 m²</text>
+<text x="2225" y="-1375" font-size="150" fill="#8b8577" text-anchor="middle">3330 mm turn · 99%</text>
+<text x="5725" y="-1715" font-size="220" font-weight="600" fill="#403c33" text-anchor="middle">KITCHEN</text>
+<text x="5725" y="-1445" font-size="190" fill="#8b8577" text-anchor="middle">14.1 m²</text>
+<text x="5725" y="-1225" font-size="150" fill="#8b8577" text-anchor="middle">2518 mm turn · 95%</text>
+<text x="2825" y="3135" font-size="220" font-weight="600" fill="#403c33" text-anchor="middle">BEDROOM</text>
+<text x="2825" y="3405" font-size="190" fill="#8b8577" text-anchor="middle">16.7 m²</text>
+<text x="2825" y="3625" font-size="150" fill="#8b8577" text-anchor="middle">2884 mm turn · 98%</text>
+<text x="5925" y="3735" font-size="220" font-weight="600" fill="#403c33" text-anchor="middle">WET ROOM</text>
+<text x="5925" y="4005" font-size="190" fill="#8b8577" text-anchor="middle">12.2 m²</text>
+<text x="5925" y="4225" font-size="150" fill="#8b8577" text-anchor="middle">3000 mm turn · 98%</text>
+<line x1="0" y1="6060" x2="1000" y2="6060" stroke="#8b8577" stroke-width="26"/>
+<text x="1120" y="6130" font-size="180" fill="#8b8577">1 m</text>
+<text x="7600" y="6130" font-size="180" fill="#8b8577" text-anchor="end">Designed by an agent, approved once — drawn in Groundplan</text>
+</svg>
