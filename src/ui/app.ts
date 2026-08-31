@@ -311,7 +311,7 @@ function renderRail(node: HTMLElement): void {
       [
         ['issues', `Findings (${store.analysis.violations.length})`],
         ['activity', 'Activity'],
-        ['tools', `Site tools (${host.toolNames.length})`],
+        ['tools', `Site tools (${host.specs.length})`],
       ] as [Tab, string][]
     ).map(([key, label]) =>
       h(
@@ -483,6 +483,13 @@ function toolsPanel(): HTMLElement {
   return h(
     'div',
     { class: 'tools' },
+    host.status === 'unavailable'
+      ? h(
+          'p',
+          { class: 'panel-note warn-note' },
+          'No Model Context host in this browser, so nothing is registered — but the tools below are real and you can still run them by hand.',
+        )
+      : null,
     h(
       'p',
       { class: 'panel-note' },

@@ -227,8 +227,11 @@ function openUpRoom(plan: Plan, roomId: string): FixOutcome {
     const type = item.type;
     const label = item.label;
     // Lift it out, then let the wall-hugging placer find it a better berth.
+    const keepId = item.id;
     deleteFurniture(plan, item.id);
     const replaced = addFurniture(plan, { type, roomRef: room.id, label });
+    // Carry the id across so this reads as a move, not a deletion and a purchase.
+    if (replaced.ok) replaced.value.id = keepId;
     if (!replaced.ok) {
       // Could not re-place it; leaving it out is still a valid repair to offer.
       actions.push(`Removed ${label.toLowerCase()} — it would not fit anywhere clear of the turning circle.`);
@@ -270,10 +273,11 @@ function rehomeFurniture(plan: Plan, furnitureId: string): FixOutcome {
   const room =
     plan.rooms.find((r) => rectsOverlap(furnitureRect(item), roomRect(r), 1)) ?? plan.rooms[0];
   if (!room) return no('There is nowhere to put it.');
-  const { type, label } = item;
+  const { type, label, id } = item;
   deleteFurniture(plan, item.id);
   const res = addFurniture(plan, { type, roomRef: room.id, label });
   if (!res.ok) return no(`Nowhere clear in "${room.name}" to re-park the ${label.toLowerCase()}.`);
+  res.value.id = id;
   return ok([`Re-parked ${label.toLowerCase()} against a wall in "${room.name}".`]);
 }
 

@@ -435,3 +435,5 @@ code { font-family: var(--mono); font-size: 0.86em; }
     transition-duration: 0.01ms !important;
   }
 }
+
+.panel-note.warn-note { color: #f0c078; border-bottom-color: #4d3a15; }
