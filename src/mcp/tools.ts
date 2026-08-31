@@ -20,9 +20,10 @@
  */
 
 import { CATALOG, ROOM_TYPES, ROOM_TYPE_KEYS } from '../core/catalog';
-import { areaM2, openingNeighbour, rectCentre, roomRect, wallSegments } from '../core/geometry';
+import { areaM2, openingNeighbour, openingRect, rectCentre, roomRect, wallSegments } from '../core/geometry';
 import { clearanceAt, doorClearWidth } from '../core/grid';
 import {
+  findEntity,
   findFurniture,
   findOpening,
   findRoom,
@@ -549,16 +550,17 @@ function readTools(): ToolSpec[] {
         const resolve = (ref: string) => {
           const literal = ref.match(/^\s*(-?\d+)\s*,\s*(-?\d+)\s*$/);
           if (literal) return { label: `point ${ref}`, x: Number(literal[1]), y: Number(literal[2]) };
-          const room = findRoom(plan, ref);
-          if (room) return { label: room.name, ...rectCentre(roomRect(room)) };
-          const f = findFurniture(plan, ref);
-          if (f) return { label: f.label, x: f.cx, y: f.cy };
-          const op = findOpening(plan, ref);
-          if (op) {
-            const r = plan.rooms.find((x) => x.id === op.roomId);
-            if (r) return { label: `${op.kind} in ${r.name}`, ...rectCentre(roomRect(r)) };
-          }
-          return null;
+          const found = findEntity(plan, ref);
+          if (!found) return null;
+          if (found.kind === 'room') return { label: found.room.name, ...rectCentre(roomRect(found.room)) };
+          if (found.kind === 'furniture') return { label: found.item.label, x: found.item.cx, y: found.item.cy };
+          // The middle of the opening itself, not of the room it is cut into:
+          // "how far from the door to the bed" has to mean the door.
+          const hole = openingRect(plan, found.opening);
+          const host = plan.rooms.find((x) => x.id === found.opening.roomId);
+          return hole
+            ? { label: `${found.opening.kind} in ${host?.name ?? 'the plan'}`, ...rectCentre(hole) }
+            : null;
         };
         const from = resolve(s(args.from));
         const to = resolve(s(args.to));
@@ -1096,13 +1098,7 @@ function viewTools(): ToolSpec[] {
       execute: (args) => {
         const refs = Array.isArray(args.targets) ? (args.targets as unknown[]).map(String) : [];
         const ids = refs
-          .map(
-            (r) =>
-              findRoom(store.plan, r)?.id ??
-              findFurniture(store.plan, r)?.id ??
-              findOpening(store.plan, r)?.id ??
-              null,
-          )
+          .map((r) => findEntity(store.plan, r)?.id ?? findOpening(store.plan, r)?.id ?? null)
           .filter((x): x is string => Boolean(x));
         if (ids.length === 0) {
           return replyError('None of those matched anything on the plan.', {
@@ -1250,22 +1246,14 @@ function viewTools(): ToolSpec[] {
             store.select(null);
             changed.push('selection cleared');
           } else {
-            const room = findRoom(store.plan, ref);
-            const item = room ? null : findFurniture(store.plan, ref);
-            const opening = room || item ? null : findOpening(store.plan, ref);
-            if (!room && !item && !opening) {
+            const found = findEntity(store.plan, ref);
+            if (!found) {
               return replyError(`Nothing on the plan matches "${ref}".`, {
                 hint: `Rooms in this plan: ${roomNames(store.plan)}. Furniture and openings can be given by label or id from get_plan.`,
               });
             }
-            store.select(
-              room
-                ? { kind: 'room', id: room.id }
-                : item
-                  ? { kind: 'furniture', id: item.id }
-                  : { kind: 'opening', id: opening!.id },
-            );
-            changed.push(`selected ${room?.name ?? item?.label ?? opening?.kind}`);
+            store.select({ kind: found.kind, id: found.id });
+            changed.push(`selected ${found.label}`);
           }
         }
         if (args.fit === true) {

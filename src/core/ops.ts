@@ -65,9 +65,40 @@ export function findFurniture(plan: Plan, ref: string): Furniture | null {
     plan.furniture.find((f) => f.id === ref) ??
     plan.furniture.find((f) => f.label.toLowerCase() === needle) ??
     plan.furniture.find((f) => f.type === needle) ??
-    plan.furniture.find((f) => f.label.toLowerCase().includes(needle)) ??
+    // Substring matching only once there is enough to match on. Two letters
+    // will hit something eventually — "ob" is inside "Oven / hob" — and a
+    // near-miss that silently resolves is worse than no match at all.
+    (needle.length >= 3 ? plan.furniture.find((f) => f.label.toLowerCase().includes(needle)) : undefined) ??
     null
   );
+}
+
+export type Entity =
+  | { kind: 'room'; id: string; label: string; room: Room }
+  | { kind: 'furniture'; id: string; label: string; item: Furniture }
+  | { kind: 'opening'; id: string; label: string; opening: Opening };
+
+/**
+ * Resolves a reference to whatever it names, whichever kind that is.
+ *
+ * Ids win outright, across all three kinds, before any name matching is tried.
+ * Resolving by kind in turn used to mean a fuzzy furniture match could swallow
+ * an exact opening id.
+ */
+export function findEntity(plan: Plan, ref: string): Entity | null {
+  if (!ref) return null;
+  const room = plan.rooms.find((r) => r.id === ref);
+  if (room) return { kind: 'room', id: room.id, label: room.name, room };
+  const item = plan.furniture.find((f) => f.id === ref);
+  if (item) return { kind: 'furniture', id: item.id, label: item.label, item };
+  const opening = plan.openings.find((o) => o.id === ref);
+  if (opening) return { kind: 'opening', id: opening.id, label: opening.kind, opening };
+
+  const byName = findRoom(plan, ref);
+  if (byName) return { kind: 'room', id: byName.id, label: byName.name, room: byName };
+  const byLabel = findFurniture(plan, ref);
+  if (byLabel) return { kind: 'furniture', id: byLabel.id, label: byLabel.label, item: byLabel };
+  return null;
 }
 
 export function findOpening(plan: Plan, ref: string): Opening | null {

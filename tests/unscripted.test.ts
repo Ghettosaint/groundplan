@@ -215,3 +215,32 @@ describe('everything the interface offers, an agent can reach', () => {
     });
   }
 });
+
+describe('references resolve to the thing that was named', () => {
+  it('an opening id is not swallowed by a furniture label it happens to sit inside', async () => {
+    // The bathroom door's id is "ob", which is also a substring of "Oven / hob".
+    // Resolving kind by kind used to hand back the oven.
+    const door = store.plan.openings.find((o) => o.width === 800)!;
+    expect(door.id).toBe('ob');
+    const { body } = await call('measure', { from: 'Bathroom', to: door.id });
+    expect(String(body.summary)).toContain('door');
+    expect(String(body.summary)).not.toContain('Oven');
+  });
+
+  it('two letters are not enough to match a label by substring', async () => {
+    // "ov" is inside "Oven / hob" and is nobody's id, so it should match nothing.
+    const { isError, text } = await call('measure', { from: 'Bathroom', to: 'ov' });
+    expect(isError).toBe(true);
+    expect(text).toMatch(/Could not resolve/i);
+  });
+
+  it('selecting by id picks the entity with that id, whatever kind it is', async () => {
+    const door = store.plan.openings.find((o) => o.width === 800)!;
+    await call('set_view', { select: door.id });
+    expect(store.selection).toEqual({ kind: 'opening', id: door.id });
+
+    const item = store.plan.furniture[0]!;
+    await call('set_view', { select: item.id });
+    expect(store.selection).toEqual({ kind: 'furniture', id: item.id });
+  });
+});

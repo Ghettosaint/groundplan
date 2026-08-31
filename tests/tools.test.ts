@@ -128,6 +128,17 @@ describe('read tools answer', () => {
     expect(b.body.distance_mm).toBe(5000);
   });
 
+  it('measures to the opening itself, not to the middle of its room', async () => {
+    const door = store.plan.openings.find((o) => o.width === 800)!;
+    const toDoor = await call('measure', { from: 'Bathroom', to: door.id });
+    const toRoom = await call('measure', { from: 'Bathroom', to: 'Bathroom' });
+    expect(toRoom.body.distance_mm).toBe(0);
+    // The bathroom door is on the room's south wall, so the distance to it is
+    // roughly half the room's depth — never zero.
+    expect(toDoor.body.distance_mm).toBeGreaterThan(1200);
+    expect(String(toDoor.body.summary)).toContain('door');
+  });
+
   it('measure explains itself when a reference is nonsense', async () => {
     const { raw, body } = await call('measure', { from: 'the moon', to: 'Bathroom' });
     expect(raw.isError).toBe(true);
