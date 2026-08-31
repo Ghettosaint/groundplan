@@ -2,9 +2,11 @@
 
 **Humans draw. Agents measure.**
 
-A floor plan studio whose geometry engine is exposed to AI agents as [WebMCP](https://github.com/webmachinelearning/webmcp) site tools. An agent can read your drawing, measure it against real accessibility standards, and propose repairs — and every change it makes stops at a consent dialog on the drawing itself until you approve it.
+A floor plan studio whose geometry engine is exposed to AI agents as [WebMCP](https://github.com/webmachinelearning/webmcp) site tools. An agent can read your drawing, measure it against real accessibility standards, and propose repairs — and every change it makes is drawn on the plan in violet and waits at a consent dialog until you approve it.
 
 Built for [The WebMCP Challenge](https://webmcp.devpost.com/).
+
+<img src="docs/flat-with-faults.svg" alt="A two-bedroom flat annotated with turning circles, reachable percentages and two failures" width="620">
 
 ---
 
@@ -21,14 +23,15 @@ Meanwhile the people who most need to check these things — someone adapting a 
 Open it and you get a two-bedroom flat that looks perfectly reasonable. Ask an agent to check it, and it isn't:
 
 ```
-error   Doorway into Bathroom is too tight     760 mm  → needs 815 mm
-error   Bathroom is unreachable                  2%    → needs 100%
-warning No turning circle in Kitchen           1204 mm → needs 1500 mm
+error   Doorway into Bathroom is too tight              760 mm  → needs 815 mm
+error   Bathroom is unreachable — the route narrows to
+        800 mm at the door between Bathroom and Hall    800 mm  → needs 900 mm
+warning No turning circle in Kitchen                   1204 mm  → needs 1500 mm
 warning Only 39% of Kitchen is usable
 warning 68% of the home is step-free reachable
 ```
 
-The bathroom door is 800 mm. That is 760 mm of clear opening — 40 mm short — and it means a wheelchair user in this flat cannot get to the toilet. Nothing on the drawing looks wrong. The number is wrong.
+The bathroom door is 800 mm. That is 760 mm of clear opening — 55 mm short — and it means a wheelchair user in this flat cannot get to the toilet. Nothing on the drawing looks wrong. The number is wrong.
 
 One tool call fixes it:
 
@@ -46,31 +49,35 @@ One tool call fixes it:
 }
 ```
 
-Score 52 → 78. Step-free reach 68% → 78%. Two findings closed by one 100 mm change, and the agent was told exactly that, in the same round trip.
+Score 49 → 78. Step-free reach 68% → 78%. Two findings closed by one 100 mm change, and the agent was told exactly that, in the same round trip.
+
+The other starter plan is a bungalow that passes every rule — a worked example to design against, and proof the checker can say yes as well as no.
 
 ## Why WebMCP, specifically
 
 This could not be an MCP server sitting behind an API, and it is worth being precise about why.
 
-**The measurements only exist in the page.** Clearance, reachability and turning circles are computed from a live rasterisation of the drawing at 50 mm. There is no document to upload and no stable id scheme to learn — the agent measures the thing the user is currently looking at, in the state they left it.
+**The measurements only exist in the page.** Clearance, reachability and turning circles are computed from a live rasterisation of the drawing at 50 mm. There is no document to upload and no id scheme to learn — the agent measures the thing the user is looking at, in the state they left it, including the wall they dragged ten seconds ago.
 
-**The confirmation is the real UI.** When an agent proposes a change, the page renders it next to the actual geometry with an Approve / Discard dialog, and the tool's promise does not resolve until a person clicks. A chat bubble saying "shall I widen the door?" is a paraphrase. This is the drawing.
+**The confirmation is the real UI.** When an agent proposes an edit, the page draws it on the plan — violet for what would appear or move, red for what would go, with arrows showing where things travel — and the tool's promise does not resolve until a person clicks Approve or Discard. A chat bubble asking "shall I widen the door?" is a paraphrase of a change. This is the change.
 
 **The tool set is a function of application state.** WebMCP lets a page register and unregister tools at runtime, so what an agent is *able* to ask for narrows and widens as the user works:
 
 | State | Registered tools |
 |---|---|
-| Normal editing | 22 |
-| Something selected on the canvas | 23 — an `edit_selection` tool appears, scoped to that entity |
+| Normal editing | 24 |
+| Something selected on the canvas | 25 — an `edit_selection` tool appears, scoped to that entity |
 | Findings outstanding | `fix_violation` appears, with the live rule ids as its enum |
-| **Review mode** | 9 — every mutating tool is unregistered; the agent can look but not touch |
-| **A proposal awaiting approval** | Writes withdrawn; only `check_proposal` remains, so edits cannot queue up behind a decision the user has not made |
+| **Review mode** | 10 — every mutating tool is unregistered; the agent can look but not touch |
+| **A proposal awaiting approval** | 12 — writes withdrawn, `check_proposal` added, so edits cannot queue up behind a decision the user has not made |
 
-**Both parties share one history.** Mouse drags and tool calls go through the same `commit()`. The Activity panel shows who did what, and any agent edit has a **revert** button next to it.
+That last row has one deliberate exception, and it is the subtlest thing in the codebase: the tool whose call is *currently blocked on the approval* stays registered. Unregistering a tool aborts its running invocation, so withdrawing it would kill the very call waiting for the user's answer. `ToolHost.sync` takes a `keepAlive` list for exactly this.
+
+**Both parties share one history.** Mouse drags, keyboard nudges and tool calls all go through the same `commit()`. The Activity panel shows who did what, and every agent edit has a **revert** button beside it.
 
 ## The tool surface
 
-21 base tools plus 2 contextual ones. All lengths are millimetres; every reference resolves by id, exact name, partial name or room type, so `"bathroom"`, `"Bathroom"` and `r3` all work.
+23 base tools plus contextual ones. All lengths are millimetres; every reference resolves by id, exact name, partial name or room type, so `"bathroom"`, `"Bathroom"` and `r3` all work.
 
 ### Reading
 
@@ -78,15 +85,18 @@ This could not be an MCP server sitting behind an API, and it is worth being pre
 |---|---|
 | `get_plan` | Every room with position, size, area, neighbours and external walls; every opening; every item of furniture |
 | `check_plan` | All rule findings, each with `measured`, `required`, `unit`, the entities involved and a `fix` phrased as a tool call |
-| `analyse_access` | Step-free reachable area, per-room verdicts, turning circles, and the clear width of every doorway sorted tightest-first |
+| `analyse_access` | Step-free reachable area, per-room verdicts, every doorway's clear width, and **the width and identity of the tightest point on the route into each room** |
 | `measure` | Distance between any two things — or literal `"x,y"` points — plus the clear floor radius at each end |
 | `list_catalog` | Real furniture dimensions and the clear floor each item needs in front of it |
 | `get_selection` | What the user has selected right now, so "this room" and "that door" resolve |
 | `get_activity` | The shared edit history, attributed |
+| `export_plan` | A share link carrying the whole drawing in its URL, a markdown room schedule, or the plan as SVG |
 
 ### Writing
 
 `add_room` · `edit_room` · `add_opening` · `edit_opening` · `add_furniture` · `edit_furniture` · `furnish_room` · `delete_entity` · `clear_room` · `set_standards` · `undo_last` · `load_sample`
+
+…and **`apply_batch`**, which runs a whole sequence against one draft under a single approval. It is genuinely atomic: if step four is rejected, steps one to three never happened, and the agent is told which step failed and why. Designing a room is one decision for the user, not eleven.
 
 ### Collaborating
 
@@ -99,7 +109,7 @@ This could not be an MCP server sitting behind an API, and it is worth being pre
 
 | Tool | Appears when |
 |---|---|
-| `fix_violation` | Anything is failing. Applies the canonical repair — widen the door, add the window, re-park whatever is eating the turning circle |
+| `fix_violation` | Anything is failing. Applies the canonical repair — widen the door that is actually pinching the route, add the window, re-park whatever is eating the turning circle |
 | `edit_selection` | The user has something selected |
 | `check_proposal` | A change is waiting for approval |
 
@@ -111,25 +121,26 @@ Three decisions did most of the work:
 
 2. **Mutations report their effect on the rules.** Every write returns `issues.resolved` and `issues.introduced`. The agent finds out whether the edit *helped* without a second round trip, which is what turns a sequence of calls into a convergent loop.
 
-3. **`check_plan` findings are machine-actionable.** `measured`, `required`, `entity_ids` and a `fix` sentence written as an instruction. The rule engine is not a status light; it is the other half of the agent's loop.
+3. **Findings name the culprit, not the symptom.** "The bathroom is unreachable" is useless. "The route narrows to 800 mm at the door between Bathroom and Hall" tells an agent precisely which of the seven doors to widen — and the finding carries that opening's id.
 
 ## How the measurements work
 
 `src/core/grid.ts` is the honest bit.
 
-1. **Rasterise** the plan at 50 mm. Rooms become floor; wall bands straddle every shared edge; doors and archways are carved back out; windows stay solid; furniture footprints are burned in.
-2. **Exact Euclidean distance transform** (Felzenszwalb & Huttenlocher) over the obstacle set gives the **clear radius at every square of floor**. That single field yields turning circles (largest clear circle in a room) and doorway clear widths (longest unobstructed run across the reveal).
-3. **Flood fill from the front door**, constrained to cells whose clearance is at least the mobility radius. A doorway narrower than the body simply does not connect — which is exactly the failure this app exists to surface.
-4. **Dilate the result by the same radius** to get the floor that body actually *sweeps*, which is what a person means by "how much of my home can I get to".
+1. **Rasterise** the plan at 50 mm — rooms become floor, wall bands straddle every shared edge, doors and archways are carved back out, windows stay solid, furniture footprints are burned in.
+2. **Exact Euclidean distance transform** (Felzenszwalb & Huttenlocher) over the obstacle set gives the **clear radius at every square of floor**. That single field yields turning circles and doorway clear widths.
+3. **Flood fill from the front door**, restricted to cells whose clearance is at least the mobility radius. A doorway narrower than the body simply does not connect.
+4. **Dilate the result by the same radius** to get the floor that body actually *sweeps* — what a person means by "how much of my home can I get to".
+5. **Widest-path search** — Dijkstra with `min` in place of `+` and a max-heap — gives, for every square of floor, the widest body that could ever reach it, and the path it took. Walking that path back finds the pinch point, and matching the pinch against the openings names the door responsible.
 
-Toggle **Clearance heatmap** to see step 2 and **Step-free reach** to see steps 3–4. The agent's tools return the numbers behind those colours.
+Step 5 is what makes the tool results actionable rather than merely correct. Toggle **Clearance heatmap** to see step 2 and **Step-free reach** to see steps 3–4.
 
 ## The rules
 
 | Rule | Checks |
 |---|---|
 | `door.clear_width` | Clear opening ≥ 815 mm (ADA/ANSI A117.1) |
-| `access.unreachable` / `access.partial` | Can a 900 mm body get there from the front door |
+| `access.unreachable` / `access.partial` | Can a 900 mm body get there from the front door — and if not, what is pinching |
 | `access.turning_circle` | 1500 mm clear circle in living, bed, kitchen, bathroom |
 | `plan.circulation` | Share of the home that is step-free reachable |
 | `room.min_area` / `room.min_dimension` | Habitable room minimums |
@@ -142,7 +153,31 @@ Toggle **Clearance heatmap** to see step 2 and **Step-free reach** to see steps 
 | `room.overlap` | Rooms meet edge to edge, never intersect |
 | `kitchen.work_triangle` | Sink–hob–fridge triangle within 3.6–6.6 m (advisory) |
 
-Thresholds follow widely used residential guidance — ADA/ANSI A117.1 and ISO 21542 for clearances, typical habitable-room minimums elsewhere. They are adjustable at runtime via `set_standards`, because a plan being checked for a walking frame is a different plan from one being checked for a wheelchair. **Groundplan is a design aid, not a code compliance certificate.**
+Thresholds follow widely used residential guidance — ADA/ANSI A117.1 and ISO 21542 for clearances, typical habitable-room minimums elsewhere. They are adjustable at runtime via `set_standards`, because a plan checked for a walking frame is a different plan from one checked for a wheelchair. **Groundplan is a design aid, not a code compliance certificate.**
+
+## Getting things out
+
+Nothing is ever uploaded, so everything leaves the same way it arrived — in the page.
+
+- **Share link** — the whole plan, compressed into the URL fragment. It works with no server behind it, and `export_plan` lets an agent hand someone a link to the plan it just fixed.
+- **SVG** — vector, opens anywhere. The drawings in this README are generated by that same exporter (`npm run docs:render`), so they cannot drift from the code.
+- **Room schedule** — a markdown table of areas, turning circles and route widths, for pasting into a message.
+- **PNG** — the current view.
+
+## Keyboard and screen readers
+
+A tool about accessible design that cannot itself be used from a keyboard would be a poor advertisement for the idea.
+
+| Key | Does |
+|---|---|
+| `.` / `,` | Move through every room, opening and item in turn |
+| Arrow keys | Nudge the selection 50 mm (Shift 10 mm, Alt 500 mm); pan when nothing is selected |
+| `+` / `−` / `0` | Zoom in, out, fit |
+| `Escape` | Deselect |
+| `Delete` | Remove the selection |
+| `Ctrl/⌘ Z`, `Shift Ctrl/⌘ Z` | Undo, redo |
+
+The canvas is focusable and labelled, every control has an accessible name, the rail is a real tablist, and a live region announces the selection and the current findings count. Animation respects `prefers-reduced-motion`.
 
 ## Running it
 
@@ -150,7 +185,13 @@ Thresholds follow widely used residential guidance — ADA/ANSI A117.1 and ISO 2
 npm install && npm run dev
 ```
 
-Then open <http://localhost:5173>. Build with `npm run build`; the output in `dist/` is a static site with no backend of any kind — everything, including your plan, stays in the browser.
+Then open <http://localhost:5173>.
+
+```bash
+npm test          # 50 unit tests over the geometry, grid, rules, ops and exports
+npm run build     # type-check and bundle to dist/ — a static site, no backend
+npm run docs:render   # regenerate the drawings in docs/
+```
 
 ## Driving it with an agent
 
@@ -163,11 +204,13 @@ Things worth asking for:
 
 > Check this flat for wheelchair access and fix whatever fails.
 
-> Turn on the clearance heatmap and tell me which room is the worst.
+> Which door is stopping me getting to the bathroom, and how much wider does it need to be?
+
+> Turn on the clearance heatmap and tell me which room is worst.
 
 > I'm selecting the second bedroom — can a double bed and a wardrobe fit with a turning circle?
 
-> Load the empty shell and design a one-bedroom flat for a wheelchair user in it.
+> Load the empty shell and design a one-bedroom flat for a wheelchair user, then send me a link.
 
 Without WebMCP support the app is an ordinary, complete floor plan editor. That progressive-enhancement contract is deliberate.
 
@@ -177,24 +220,30 @@ Without WebMCP support the app is an ordinary, complete floor plan editor. That 
 src/
   core/
     types.ts      Plan model. Integer millimetres throughout — no float geometry anywhere
-    geometry.ts   Rectangles, shared wall segments, openings, door swings, approach zones
-    grid.ts       Rasterisation, exact EDT, clearance field, reachability
+    geometry.ts   Rectangles, shared wall segments, wall runs, openings, swings, approach zones
+    grid.ts       Rasterisation, exact EDT, clearance field, reachability, widest-path routing
     rules.ts      The rule engine — every finding carries measured, required and a fix
     fixes.ts      Canonical repairs behind fix_violation
-    ops.ts        The only functions that mutate a plan; shared by mouse and tools
+    ops.ts        The only functions that mutate a plan; shared by mouse, keyboard and tools
     catalog.ts    Furniture with real dimensions and clear-floor requirements
-    samples.ts    Starter plans, flawed on purpose
+    samples.ts    Starter plans — one flawed on purpose, one that passes everything
+    svg.ts        Vector export and the markdown room schedule
+    share.ts      Plans compressed into a URL fragment
     store.ts      State, undo history, the shared activity feed
   mcp/
     runtime.ts    Host detection (native → polyfill) and the register/unregister diff
+    operations.ts Arguments to mutations — one dispatcher for single tools and batches
     tools.ts      The tool surface
     gate.ts       The consent gate: proposals, change descriptions, issue deltas
   ui/
-    canvas.ts     The drawing sheet and direct manipulation
-    app.ts        Header, findings, activity, tool inspector, approval dialog
+    canvas.ts     The drawing sheet, direct manipulation, keyboard control, ghost previews
+    app.ts        Header, findings, activity, tool inspector, approval card, exports
+tests/            50 tests over geometry, occupancy, routing, rules, batching and exports
 ```
 
 No framework, no backend, no telemetry. TypeScript in strict mode, built with Vite.
+
+<img src="docs/accessible-bungalow.svg" alt="A bungalow that passes every rule, annotated with turning circles and reachable percentages" width="620">
 
 ## Licence
 

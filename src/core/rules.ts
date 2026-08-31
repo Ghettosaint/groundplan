@@ -31,8 +31,11 @@ import {
   rasterise,
   reachableFrom,
   roomReachRatio,
+  routeInto,
+  widestPaths,
   type Grid,
   type Reachability,
+  type RouteField,
 } from './grid';
 import type { Plan, Room, Violation } from './types';
 
@@ -50,6 +53,10 @@ export interface RoomStats {
   openY: number;
   /** Fraction of the room reachable at the plan's mobility radius. */
   reachRatio: number;
+  /** Widest body that can reach this room from the entrance, mm. */
+  routeWidthMm: number;
+  /** What is pinching that route, in words. */
+  routeLimit: string | null;
   glazingM2: number;
   doorCount: number;
   windowCount: number;
@@ -60,6 +67,8 @@ export interface Analysis {
   violations: Violation[];
   grid: Grid;
   reach: Reachability;
+  /** Widest-path field from the entrance, used to name route bottlenecks. */
+  route: RouteField;
   stats: {
     totalAreaM2: number;
     reachableAreaM2: number;
@@ -89,6 +98,7 @@ function round(v: number, dp = 0): number {
 export function analyse(plan: Plan): Analysis {
   const grid = rasterise(plan);
   const reach = reachableFrom(plan, grid, plan.settings.mobilityRadius);
+  const route = widestPaths(grid, reach.seed);
   const v: Violation[] = [];
   const byId = new Map(plan.rooms.map((r) => [r.id, r]));
 
@@ -215,21 +225,28 @@ export function analyse(plan: Plan): Analysis {
   }
 
   // ── Reachability and turning circles ──────────────────────────────────────
+  const door = plan.settings.mobilityRadius * 2;
   for (const room of plan.rooms) {
     const ratio = roomReachRatio(grid, reach, room);
     const meta = ROOM_TYPES[room.type];
     if (ratio < 0.05) {
+      // Name the culprit. "Unreachable" is a symptom; the pinch point is the bug.
+      const neck = findBottleneck(plan, grid, route, room);
       v.push({
         rule: 'access.unreachable',
         severity: 'error',
         title: `${room.name} is unreachable`,
-        detail: `A ${plan.settings.mobilityRadius * 2} mm-wide body cannot get from the entrance to this room. Something on the route pinches below ${plan.settings.mobilityRadius * 2} mm.`,
-        entities: [room.id],
-        measured: round(ratio * 100),
-        required: 100,
-        unit: 'ratio',
-        fix: `Call fix_violation with rule "access.unreachable" to widen every door on the route, or call analyse_access to find the tightest one first.`,
-        at: rectCentre(roomRect(room)),
+        detail: neck
+          ? `The best route from the entrance narrows to ${neck.widthMm} mm at ${neck.description}. A ${door} mm-wide body will not pass.`
+          : `Nothing connects this room to the entrance at all.`,
+        entities: neck?.openingId ? [room.id, neck.openingId] : [room.id],
+        measured: neck?.widthMm ?? 0,
+        required: door,
+        unit: 'mm',
+        fix: neck?.openingId
+          ? `Call edit_opening on ${neck.openingId} with width_mm ${Math.max(plan.settings.minClearDoor + 85, door + 100)}, or fix_violation with rule "access.unreachable".`
+          : `Call fix_violation with rule "access.unreachable", or analyse_access to see the whole route.`,
+        at: neck?.at ?? rectCentre(roomRect(room)),
       });
     } else if (ratio < 0.6) {
       v.push({
@@ -449,15 +466,20 @@ export function analyse(plan: Plan): Analysis {
 
   const errorCount = v.filter((x) => x.severity === 'error').length;
   const warningCount = v.filter((x) => x.severity === 'warning').length;
+  // Errors and warnings cost the most; on top of that, a home loses marks for
+  // floor nobody can get to. The 90% allowance is the floor that sits under
+  // wardrobes and behind beds, which no plan ever reclaims.
+  const unreachablePenalty = Math.max(0, 0.9 - reach.ratio) * 50;
   const score = Math.max(
     0,
-    Math.round(100 - errorCount * 12 - warningCount * 4 - (1 - reach.ratio) * 25),
+    Math.round(100 - errorCount * 12 - warningCount * 4 - unreachablePenalty),
   );
 
   return {
     violations: v.sort(bySeverity),
     grid,
     reach,
+    route,
     stats: {
       totalAreaM2: round(reach.totalM2, 1),
       reachableAreaM2: round(reach.areaM2, 1),
@@ -467,7 +489,84 @@ export function analyse(plan: Plan): Analysis {
       warningCount,
       score,
     },
-    rooms: plan.rooms.map((room) => roomStats(plan, grid, reach, room)),
+    rooms: plan.rooms.map((room) => roomStats(plan, grid, reach, route, room)),
+  };
+}
+
+/**
+ * The tightest point on the best route into a room, and what is causing it.
+ * Naming the culprit — usually one specific door — is what lets an agent fix
+ * the right thing on the first try instead of widening every door in the flat.
+ */
+export interface Bottleneck {
+  /** Passage width available on the best route, mm. */
+  widthMm: number;
+  at: { x: number; y: number };
+  /** The opening responsible, when the pinch is in a doorway. */
+  openingId?: string;
+  /** A phrase that can be dropped straight into a sentence. */
+  description: string;
+}
+
+export function findBottleneck(
+  plan: Plan,
+  grid: Grid,
+  route: RouteField,
+  room: Room,
+): Bottleneck | null {
+  const result = routeInto(grid, route, roomRect(room));
+  if (!result) return null;
+
+  // Every cell on the route that is as tight as the route itself is equally
+  // "the bottleneck". Ties are common — a 900 mm door and the 900 mm of floor
+  // just past it measure the same — so we look for a doorway among them, and
+  // take the one nearest the room, which is the one worth widening.
+  const tolerance = 30;
+  const doorways = plan.openings.filter((o) => o.kind !== 'window');
+  const rects = new Map(doorways.map((o) => [o.id, openingRect(plan, o)] as const));
+  const pad = 120;
+
+  for (let k = result.path.length - 1; k >= 0; k--) {
+    const cell = result.path[k]!;
+    if (grid.clearance[cell]! > result.radiusMm + tolerance) continue;
+    const cx = cell % grid.cols;
+    const cy = (cell - cx) / grid.cols;
+    const px = grid.ox + (cx + 0.5) * grid.cell;
+    const py = grid.oy + (cy + 0.5) * grid.cell;
+    for (const op of doorways) {
+      const r = rects.get(op.id);
+      if (!r) continue;
+      if (px < r.x - pad || px > r.x + r.w + pad || py < r.y - pad || py > r.y + r.h + pad) continue;
+      const host = plan.rooms.find((x) => x.id === op.roomId);
+      const other = plan.rooms.find((x) => x.id === openingNeighbour(plan, op));
+      const between = other ? `${host?.name} and ${other.name}` : `${host?.name} and outside`;
+      return {
+        widthMm: result.widthMm,
+        at: { x: px, y: py },
+        openingId: op.id,
+        description: `the ${op.kind} between ${between}`,
+      };
+    }
+  }
+
+  // Not a doorway: something is parked in the way.
+  const near = plan.furniture
+    .map((f) => ({ f, d: Math.hypot(f.cx - result.pinch.x, f.cy - result.pinch.y) }))
+    .filter((x) => x.d < 1400)
+    .sort((a, b) => a.d - b.d)[0];
+  const where = plan.rooms.find((r) => {
+    const rect = roomRect(r);
+    return (
+      result.pinch.x >= rect.x && result.pinch.x <= rect.x + rect.w &&
+      result.pinch.y >= rect.y && result.pinch.y <= rect.y + rect.h
+    );
+  });
+  return {
+    widthMm: result.widthMm,
+    at: result.pinch,
+    description: near
+      ? `the gap beside the ${near.f.label.toLowerCase()} in ${where?.name ?? 'the plan'}`
+      : `a ${result.widthMm} mm pinch in ${where?.name ?? 'the plan'}`,
   };
 }
 
@@ -501,7 +600,14 @@ function bySeverity(a: Violation, b: Violation): number {
   return rank[a.severity] - rank[b.severity];
 }
 
-function roomStats(plan: Plan, grid: Grid, reach: Reachability, room: Room): RoomStats {
+function roomStats(
+  plan: Plan,
+  grid: Grid,
+  reach: Reachability,
+  route: RouteField,
+  room: Room,
+): RoomStats {
+  const neck = findBottleneck(plan, grid, route, room);
   const openings = plan.openings.filter(
     (o) => o.roomId === room.id || openingNeighbour(plan, o) === room.id,
   );
@@ -517,6 +623,8 @@ function roomStats(plan: Plan, grid: Grid, reach: Reachability, room: Room): Roo
     openX: Math.round(best.x),
     openY: Math.round(best.y),
     reachRatio: round(roomReachRatio(grid, reach, room), 2),
+    routeWidthMm: neck?.widthMm ?? 0,
+    routeLimit: neck?.description ?? null,
     glazingM2: round(
       openings.filter((o) => o.kind === 'window').reduce((s, w) => s + windowAreaM2(w), 0),
       2,

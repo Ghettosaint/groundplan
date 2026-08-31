@@ -20,39 +20,37 @@
  */
 
 import { CATALOG, ROOM_TYPES, ROOM_TYPE_KEYS } from '../core/catalog';
-import { applyFix, findViolation } from '../core/fixes';
 import { areaM2, openingNeighbour, rectCentre, roomRect, wallSegments } from '../core/geometry';
 import { clearanceAt, doorClearWidth } from '../core/grid';
 import {
-  addFurniture,
-  addOpening,
-  addRoom,
-  clearRoom,
-  deleteFurniture,
-  deleteOpening,
-  deleteRoom,
   findFurniture,
   findOpening,
   findRoom,
-  furnishRoom,
   moveFurniture,
   moveOpening,
   moveRoom,
   renameRoom,
   resizeRoom,
   rotateFurniture,
-  setDoorSwing,
-  setOpeningWidth,
-  setRoomType,
-  setSettings,
   roomNames,
-  type OpResult,
+  setOpeningWidth,
 } from '../core/ops';
 import { analyse } from '../core/rules';
-import { shellPlan, starterPlan } from '../core/samples';
+import { accessiblePlan, shellPlan, starterPlan } from '../core/samples';
+import { shareLink } from '../core/share';
+import { planToSchedule, planToSvg } from '../core/svg';
 import { store } from '../core/store';
-import type { Plan, RoomType, Side } from '../core/types';
+import type { Plan, RoomType } from '../core/types';
 import { describeDelta, issueDelta, requestApproval } from './gate';
+import {
+  OPERATION_NAMES,
+  RUNNERS,
+  num,
+  runBatch,
+  s,
+  type ArgMap,
+  type Runner,
+} from './operations';
 import { host, reply, replyError, type ToolContent, type ToolSpec } from './runtime';
 
 // ── Shared schema fragments ──────────────────────────────────────────────────
@@ -85,8 +83,6 @@ async function withPresence<T>(tool: string, run: () => Promise<T> | T): Promise
     store.emit();
   }
 }
-
-type Runner = (draft: Plan) => OpResult<unknown>;
 
 interface MutateOptions {
   /** Skip the approval gate when the user has switched it off. */
@@ -251,10 +247,6 @@ function issuesForAgent(plan: Plan, severity?: string, rule?: string) {
 
 // ── The tools ────────────────────────────────────────────────────────────────
 
-const s = (v: unknown) => (typeof v === 'string' ? v : '');
-const num = (v: unknown, fallback?: number) =>
-  typeof v === 'number' && Number.isFinite(v) ? v : fallback;
-
 function readTools(): ToolSpec[] {
   return [
     {
@@ -325,9 +317,15 @@ function readTools(): ToolSpec[] {
         note('analyse_access', `${Math.round(a.stats.reachableRatio * 100)}% reachable.`);
         return reply({
           ok: true,
-          summary: `${a.stats.reachableAreaM2} m² of ${a.stats.totalAreaM2} m² (${Math.round(
-            a.stats.reachableRatio * 100,
-          )}%) is reachable with a ${working.settings.mobilityRadius * 2} mm body.`,
+          summary: (() => {
+            const worst = [...a.rooms].filter((r) => r.routeWidthMm > 0).sort((x, y) => x.routeWidthMm - y.routeWidthMm)[0];
+            const base = `${a.stats.reachableAreaM2} m² of ${a.stats.totalAreaM2} m² (${Math.round(
+              a.stats.reachableRatio * 100,
+            )}%) is reachable with a ${working.settings.mobilityRadius * 2} mm body.`;
+            return worst && worst.routeWidthMm < working.settings.mobilityRadius * 2
+              ? `${base} The tightest route is into ${worst.name}: ${worst.routeWidthMm} mm at ${worst.routeLimit ?? 'an unidentified pinch'}.`
+              : base;
+          })(),
           tested_diameter_mm: working.settings.mobilityRadius * 2,
           reachable_area_m2: a.stats.reachableAreaM2,
           total_area_m2: a.stats.totalAreaM2,
@@ -336,6 +334,10 @@ function readTools(): ToolSpec[] {
             reachable_fraction: r.reachRatio,
             turning_circle_mm: r.turningCircleMm,
             area_m2: r.areaM2,
+            // The widest body that can reach this room, and what stops a wider
+            // one. This is the number to act on when a room is cut off.
+            route_width_mm: r.routeWidthMm,
+            route_limited_by: r.routeLimit,
             verdict:
               r.reachRatio < 0.05
                 ? 'cut off entirely'
@@ -347,6 +349,11 @@ function readTools(): ToolSpec[] {
           })),
           doorways: doors,
           tightest_doorway: doors[0],
+          tightest_route: [...a.rooms]
+            .filter((r) => r.routeWidthMm > 0)
+            .sort((x, y) => x.routeWidthMm - y.routeWidthMm)
+            .slice(0, 3)
+            .map((r) => `${r.name}: ${r.routeWidthMm} mm at ${r.routeLimit ?? 'an unidentified pinch'}`),
         });
       },
     },
@@ -467,6 +474,51 @@ function readTools(): ToolSpec[] {
     },
 
     {
+      name: 'export_plan',
+      description:
+        'Hand the person something they can keep: a shareable link that carries the whole drawing in the URL, a markdown room schedule to paste into a message, or the plan as SVG. Use "link" when you finish a piece of work — it is the fastest way to give someone the result.',
+      annotations: { title: 'Export the plan', readOnlyHint: true },
+      inputSchema: obj(
+        {
+          format: {
+            type: 'string',
+            enum: ['link', 'schedule', 'svg'],
+            description:
+              'link: a URL containing the plan. schedule: a markdown table of rooms, areas and clearances. svg: the drawing as vector source.',
+          },
+        },
+        ['format'],
+      ),
+      execute: async (args) => {
+        const plan = store.plan;
+        const analysis = analyse(plan);
+        const format = s(args.format) || 'link';
+        note('export_plan', `Exported as ${format}.`);
+        if (format === 'schedule') {
+          return reply({
+            ok: true,
+            summary: `Room schedule for ${plan.name}.`,
+            markdown: planToSchedule(plan, analysis),
+          });
+        }
+        if (format === 'svg') {
+          const svg = planToSvg(plan, { analysis, annotate: true });
+          return reply({
+            ok: true,
+            summary: `${plan.name} as SVG, ${Math.round(svg.length / 1024)} kB of source.`,
+            svg,
+          });
+        }
+        const url = await shareLink(plan);
+        return reply({
+          ok: true,
+          summary: 'A link carrying the whole plan. Nothing was uploaded — the drawing is in the URL itself.',
+          url,
+        });
+      },
+    },
+
+    {
       name: 'get_activity',
       description:
         'Read the shared edit history — what changed, when, and whether a person or an agent did it. Useful for picking up where a previous session left off, or for explaining what you just did.',
@@ -512,22 +564,10 @@ function writeTools(): ToolSpec[] {
         ['type', 'width_mm', 'depth_mm'],
       ),
       execute: (args) =>
-        mutate(
-          'add_room',
-          (draft) =>
-            addRoom(draft, {
-              type: s(args.type) as RoomType,
-              widthMm: num(args.width_mm, 3000)!,
-              depthMm: num(args.depth_mm, 3000)!,
-              name: s(args.name) || undefined,
-              againstRoom: s(args.against_room) || undefined,
-              againstSide: (s(args.against_side) as Side) || undefined,
-              alignMm: num(args.align_mm),
-              xMm: num(args.x_mm),
-              yMm: num(args.y_mm),
-            }),
-          { title: `Add a ${s(args.type)}`, spotlight: (p) => [p.rooms[p.rooms.length - 1]?.id ?? ''] },
-        ),
+        mutate('add_room', RUNNERS.add_room!(args), {
+          title: `Add a ${s(args.type)}`,
+          spotlight: (p) => [p.rooms[p.rooms.length - 1]?.id ?? ''],
+        }),
     },
 
     {
@@ -553,44 +593,10 @@ function writeTools(): ToolSpec[] {
         ['room'],
       ),
       execute: (args) =>
-        mutate(
-          'edit_room',
-          (draft) => {
-            const ref = s(args.room);
-            const messages: string[] = [];
-            if (args.width_mm !== undefined || args.depth_mm !== undefined) {
-              const r = resizeRoom(
-                draft,
-                ref,
-                num(args.width_mm),
-                num(args.depth_mm),
-                (s(args.anchor) as Side | 'centre') || 'centre',
-              );
-              if (!r.ok) return r;
-              messages.push(r.message);
-            }
-            if (args.dx_mm !== undefined || args.dy_mm !== undefined) {
-              const r = moveRoom(draft, ref, num(args.dx_mm, 0)!, num(args.dy_mm, 0)!);
-              if (!r.ok) return r;
-              messages.push(r.message);
-            }
-            if (args.name !== undefined) {
-              const r = renameRoom(draft, ref, s(args.name));
-              if (!r.ok) return r;
-              messages.push(r.message);
-            }
-            if (args.type !== undefined) {
-              const r = setRoomType(draft, ref, s(args.type) as RoomType);
-              if (!r.ok) return r;
-              messages.push(r.message);
-            }
-            if (messages.length === 0) {
-              return { ok: false, error: 'Nothing to change.', hint: 'Pass at least one of width_mm, depth_mm, dx_mm, dy_mm, name or type.' };
-            }
-            return { ok: true, value: null, message: messages.join(' ') };
-          },
-          { title: `Edit ${s(args.room)}`, spotlight: (p) => [findRoom(p, s(args.room))?.id ?? ''] },
-        ),
+        mutate('edit_room', RUNNERS.edit_room!(args), {
+          title: `Edit ${s(args.room)}`,
+          spotlight: (p) => [findRoom(p, s(args.room))?.id ?? ''],
+        }),
     },
 
     {
@@ -614,23 +620,10 @@ function writeTools(): ToolSpec[] {
         ['room', 'kind'],
       ),
       execute: (args) =>
-        mutate(
-          'add_opening',
-          (draft) =>
-            addOpening(draft, {
-              roomRef: s(args.room),
-              side: (s(args.side) as Side) || 'n',
-              kind: (s(args.kind) as 'door' | 'window' | 'archway') || 'door',
-              toRoom: s(args.to_room) || undefined,
-              exterior: args.exterior === true,
-              widthMm: num(args.width_mm),
-              offsetMm: num(args.offset_mm),
-              swing: (s(args.swing) as Side | 'none') || undefined,
-              sillMm: num(args.sill_mm),
-              headMm: num(args.head_mm),
-            }),
-          { title: `Add a ${s(args.kind) || 'door'}`, spotlight: (p) => [p.openings[p.openings.length - 1]?.id ?? ''] },
-        ),
+        mutate('add_opening', RUNNERS.add_opening!(args), {
+          title: `Add a ${s(args.kind) || 'door'}`,
+          spotlight: (p) => [p.openings[p.openings.length - 1]?.id ?? ''],
+        }),
     },
 
     {
@@ -648,32 +641,10 @@ function writeTools(): ToolSpec[] {
         ['opening_id'],
       ),
       execute: (args) =>
-        mutate(
-          'edit_opening',
-          (draft) => {
-            const id = s(args.opening_id);
-            const messages: string[] = [];
-            if (args.width_mm !== undefined) {
-              const r = setOpeningWidth(draft, id, num(args.width_mm, 900)!);
-              if (!r.ok) return r;
-              messages.push(r.message);
-            }
-            if (args.offset_mm !== undefined) {
-              const r = moveOpening(draft, id, num(args.offset_mm, 0)!);
-              if (!r.ok) return r;
-              messages.push(r.message);
-            }
-            if (args.swing !== undefined) {
-              const r = setDoorSwing(draft, id, s(args.swing) as Side | 'none');
-              if (!r.ok) return r;
-              messages.push(r.message);
-            }
-            if (messages.length === 0)
-              return { ok: false, error: 'Nothing to change.', hint: 'Pass width_mm, offset_mm or swing.' };
-            return { ok: true, value: null, message: messages.join(' ') };
-          },
-          { title: 'Edit an opening', spotlight: () => [s(args.opening_id)] },
-        ),
+        mutate('edit_opening', RUNNERS.edit_opening!(args), {
+          title: 'Edit an opening',
+          spotlight: () => [s(args.opening_id)],
+        }),
     },
 
     {
@@ -694,20 +665,10 @@ function writeTools(): ToolSpec[] {
         ['type', 'room'],
       ),
       execute: (args) =>
-        mutate(
-          'add_furniture',
-          (draft) =>
-            addFurniture(draft, {
-              type: s(args.type),
-              roomRef: s(args.room),
-              againstSide: (s(args.against_side) as Side) || undefined,
-              xMm: num(args.x_mm),
-              yMm: num(args.y_mm),
-              rot: num(args.rotation_deg) as 0 | 90 | 180 | 270 | undefined,
-              label: s(args.label) || undefined,
-            }),
-          { title: `Place ${s(args.type)}`, spotlight: (p) => [p.furniture[p.furniture.length - 1]?.id ?? ''] },
-        ),
+        mutate('add_furniture', RUNNERS.add_furniture!(args), {
+          title: `Place ${s(args.type)}`,
+          spotlight: (p) => [p.furniture[p.furniture.length - 1]?.id ?? ''],
+        }),
     },
 
     {
@@ -727,31 +688,10 @@ function writeTools(): ToolSpec[] {
         ['item'],
       ),
       execute: (args) =>
-        mutate(
-          'edit_furniture',
-          (draft) => {
-            const ref = s(args.item);
-            const f = findFurniture(draft, ref);
-            if (!f) return { ok: false, error: `No furniture called "${ref}".`, hint: 'Call get_plan for the list.' };
-            const messages: string[] = [];
-            const x = num(args.x_mm, f.cx + num(args.dx_mm, 0)!)!;
-            const y = num(args.y_mm, f.cy + num(args.dy_mm, 0)!)!;
-            if (x !== f.cx || y !== f.cy) {
-              const r = moveFurniture(draft, f.id, x, y);
-              if (!r.ok) return r;
-              messages.push(r.message);
-            }
-            if (args.rotation_deg !== undefined) {
-              const r = rotateFurniture(draft, f.id, num(args.rotation_deg, 0) as 0 | 90 | 180 | 270);
-              if (!r.ok) return r;
-              messages.push(r.message);
-            }
-            if (messages.length === 0)
-              return { ok: false, error: 'Nothing to change.', hint: 'Pass x_mm/y_mm, dx_mm/dy_mm or rotation_deg.' };
-            return { ok: true, value: null, message: messages.join(' ') };
-          },
-          { title: `Move ${s(args.item)}`, spotlight: (p) => [findFurniture(p, s(args.item))?.id ?? ''] },
-        ),
+        mutate('edit_furniture', RUNNERS.edit_furniture!(args), {
+          title: `Move ${s(args.item)}`,
+          spotlight: (p) => [findFurniture(p, s(args.item))?.id ?? ''],
+        }),
     },
 
     {
@@ -771,16 +711,7 @@ function writeTools(): ToolSpec[] {
         ['room'],
       ),
       execute: (args) =>
-        mutate(
-          'furnish_room',
-          (draft) =>
-            furnishRoom(
-              draft,
-              s(args.room),
-              Array.isArray(args.extra_items) ? (args.extra_items as string[]).map(String) : [],
-            ),
-          { title: `Furnish ${s(args.room)}` },
-        ),
+        mutate('furnish_room', RUNNERS.furnish_room!(args), { title: `Furnish ${s(args.room)}` }),
     },
 
     {
@@ -796,23 +727,10 @@ function writeTools(): ToolSpec[] {
         ['kind', 'reference'],
       ),
       execute: (args) =>
-        mutate(
-          'delete_entity',
-          (draft) => {
-            const ref = s(args.reference);
-            switch (s(args.kind)) {
-              case 'room':
-                return deleteRoom(draft, ref);
-              case 'opening':
-                return deleteOpening(draft, ref);
-              case 'furniture':
-                return deleteFurniture(draft, ref);
-              default:
-                return { ok: false, error: 'kind must be "room", "opening" or "furniture".' };
-            }
-          },
-          { destructive: true, title: `Delete ${s(args.kind)} "${s(args.reference)}"` },
-        ),
+        mutate('delete_entity', RUNNERS.delete_entity!(args), {
+          destructive: true,
+          title: `Delete ${s(args.kind)} "${s(args.reference)}"`,
+        }),
     },
 
     {
@@ -821,7 +739,7 @@ function writeTools(): ToolSpec[] {
       annotations: { title: 'Empty a room', readOnlyHint: false, destructiveHint: true },
       inputSchema: obj({ room: ROOM_REF }, ['room']),
       execute: (args) =>
-        mutate('clear_room', (draft) => clearRoom(draft, s(args.room)), {
+        mutate('clear_room', RUNNERS.clear_room!(args), {
           destructive: true,
           title: `Empty ${s(args.room)}`,
         }),
@@ -838,18 +756,72 @@ function writeTools(): ToolSpec[] {
         min_clear_door_mm: { type: 'number', description: 'Minimum clear doorway. 815 mm is the usual figure.' },
       }),
       execute: (args) =>
-        mutate(
-          'set_standards',
-          (draft) =>
-            setSettings(draft, {
-              ...(args.mobility_diameter_mm !== undefined
-                ? { mobilityRadius: Math.round(num(args.mobility_diameter_mm, 900)! / 2) }
-                : {}),
-              ...(args.turning_circle_mm !== undefined ? { turningCircle: num(args.turning_circle_mm, 1500)! } : {}),
-              ...(args.min_clear_door_mm !== undefined ? { minClearDoor: num(args.min_clear_door_mm, 815)! } : {}),
-            }),
-          { title: 'Change the standards this plan is checked against' },
-        ),
+        mutate('set_standards', RUNNERS.set_standards!(args), {
+          title: 'Change the standards this plan is checked against',
+        }),
+    },
+
+    {
+      name: 'apply_batch',
+      description:
+        'Apply several edits as ONE atomic change with a single approval. Use this whenever a task needs more than one step — designing a room, fixing a list of findings, furnishing a flat — instead of asking the person to approve each edit separately. If any step is rejected, nothing is applied and you are told which step failed and why.',
+      annotations: { title: 'Apply a set of changes', readOnlyHint: false, destructiveHint: false },
+      inputSchema: obj(
+        {
+          intent: {
+            type: 'string',
+            description:
+              'One sentence saying what this batch is for. It is the heading the person sees on the approval card, so write it for them.',
+          },
+          operations: {
+            type: 'array',
+            description: 'The steps, applied in order.',
+            items: {
+              type: 'object',
+              properties: {
+                op: {
+                  type: 'string',
+                  enum: OPERATION_NAMES,
+                  description: 'Which operation to run.',
+                },
+                args: {
+                  type: 'object',
+                  description: 'Exactly the arguments the standalone tool of that name takes.',
+                },
+              },
+              required: ['op', 'args'],
+              additionalProperties: false,
+            },
+          },
+        },
+        ['intent', 'operations'],
+      ),
+      execute: (args) => {
+        const intent = s(args.intent) || 'A set of changes';
+        const raw = Array.isArray(args.operations) ? (args.operations as unknown[]) : [];
+        const steps = raw.map((entry) => {
+          const e = (entry ?? {}) as { op?: unknown; args?: unknown };
+          return { op: s(e.op), args: (e.args ?? {}) as ArgMap };
+        });
+        if (steps.length === 0) {
+          return replyError('No operations were given.', {
+            hint: `Pass an operations array. Available: ${OPERATION_NAMES.join(', ')}.`,
+          });
+        }
+        return mutate(
+          'apply_batch',
+          (draft) => {
+            const result = runBatch(draft, steps);
+            if (!result.ok) return { ok: false, error: result.error, hint: result.hint };
+            return {
+              ok: true,
+              value: null,
+              message: `${intent} — ${result.messages.join(' ')}`,
+            };
+          },
+          { title: intent },
+        );
+      },
     },
 
     {
@@ -869,14 +841,15 @@ function writeTools(): ToolSpec[] {
     {
       name: 'load_sample',
       description:
-        'Replace the whole drawing with a starter plan: "apartment" for a furnished two-bedroom flat with real problems in it, or "shell" for an empty 48 m² box to design from scratch. Asks for confirmation because it discards the current plan.',
+        'Replace the whole drawing with a starter plan: "apartment" for a furnished two-bedroom flat with real problems in it, "accessible" for a bungalow that passes every rule (a worked example to copy from), or "shell" for an empty 48 m² box to design from scratch. Asks for confirmation because it discards the current plan.',
       annotations: { title: 'Load a starter plan', readOnlyHint: false, destructiveHint: true },
-      inputSchema: obj({ which: { type: 'string', enum: ['apartment', 'shell'] } }, ['which']),
+      inputSchema: obj({ which: { type: 'string', enum: ['apartment', 'accessible', 'shell'] } }, ['which']),
       execute: (args) =>
         mutate(
           'load_sample',
           (draft) => {
-            const next = s(args.which) === 'shell' ? shellPlan() : starterPlan();
+            const which = s(args.which);
+            const next = which === 'shell' ? shellPlan() : which === 'accessible' ? accessiblePlan() : starterPlan();
             draft.name = next.name;
             draft.rooms = next.rooms;
             draft.openings = next.openings;
@@ -967,7 +940,12 @@ function contextualTools(): ToolSpec[] {
   const out: ToolSpec[] = [];
   const analysis = analyse(store.plan);
 
-  if (analysis.violations.length > 0 && store.mode !== 'review') {
+  const proposalHolds = Boolean(store.proposal);
+  if (
+    analysis.violations.length > 0 &&
+    store.mode !== 'review' &&
+    (!proposalHolds || store.proposal?.tool === 'fix_violation' || store.agentBusy === 'fix_violation')
+  ) {
     const rules = [...new Set(analysis.violations.map((v) => v.rule))];
     out.push({
       name: 'fix_violation',
@@ -982,28 +960,11 @@ function contextualTools(): ToolSpec[] {
         ['rule'],
       ),
       execute: (args) =>
-        mutate(
-          'fix_violation',
-          (draft) => {
-            const current = analyse(draft).violations;
-            const target = findViolation(current, s(args.rule), s(args.entity) || undefined, draft);
-            if (!target)
-              return {
-                ok: false,
-                error: `Nothing currently fails rule "${s(args.rule)}".`,
-                hint: 'Call check_plan for the live list.',
-              };
-            const outcome = applyFix(draft, target);
-            if (!outcome.applied)
-              return { ok: false, error: outcome.reason ?? 'That finding has no automatic repair.', hint: target.fix };
-            return { ok: true, value: null, message: `${target.title} — ${outcome.actions.join(' ')}` };
-          },
-          { title: `Repair: ${s(args.rule)}` },
-        ),
+        mutate('fix_violation', RUNNERS.fix_violation!(args), { title: `Repair: ${s(args.rule)}` }),
     });
   }
 
-  if (store.selection && store.mode !== 'review') {
+  if (store.selection && store.mode !== 'review' && !proposalHolds) {
     const sel = store.selection;
     const label =
       sel.kind === 'room'
@@ -1111,9 +1072,24 @@ function contextualTools(): ToolSpec[] {
  */
 export function buildTools(): ToolSpec[] {
   const tools = [...readTools(), ...viewTools()];
-  if (store.mode !== 'review' && !store.proposal) tools.push(...writeTools());
+  if (store.mode !== 'review') {
+    if (!store.proposal) {
+      tools.push(...writeTools());
+    } else {
+      // One exception to the withdrawal: the call that raised the proposal is
+      // still running, waiting on the promise the gate handed it. Unregistering
+      // it would abort that call and the person's decision would go nowhere.
+      const live = new Set([store.proposal.tool, store.agentBusy].filter(Boolean) as string[]);
+      tools.push(...writeTools().filter((t) => live.has(t.name)));
+    }
+  }
   tools.push(...contextualTools());
   return tools;
+}
+
+/** Tools that must survive a re-sync because a call is in flight through them. */
+export function inFlightTools(): string[] {
+  return [store.agentBusy, store.proposal?.tool].filter((x): x is string => Boolean(x));
 }
 
 let pending = 0;
@@ -1122,7 +1098,7 @@ let pending = 0;
 export function wireTools(): void {
   const sync = () => {
     window.clearTimeout(pending);
-    pending = window.setTimeout(() => void host.sync(buildTools()), 60);
+    pending = window.setTimeout(() => void host.sync(buildTools(), inFlightTools()), 60);
   };
   store.subscribe(sync);
   sync();

@@ -117,11 +117,16 @@ class ToolHost {
   }
 
   /**
-   * Makes the live registration match `tools`, adding what is new, dropping
-   * what is gone and re-registering anything whose schema changed.
+   * Makes the live registration match `tools`: adds what is new, drops what is
+   * gone, re-registers anything whose schema changed.
+   *
+   * @param keepAlive names that must survive regardless, because a tool call is
+   * in flight through them. Aborting a registration cancels its running call,
+   * which would strand any tool waiting on a human to approve something.
    */
-  async sync(tools: ToolSpec[]): Promise<void> {
+  async sync(tools: ToolSpec[], keepAlive: string[] = []): Promise<void> {
     this.desired = tools;
+    const protectedNames = new Set(keepAlive);
     await this.init();
     if (!this.ctx) return;
 
@@ -139,6 +144,7 @@ class ToolHost {
     const wanted = new Map(tools.map((t) => [t.name, t]));
 
     for (const [name, entry] of [...this.registered]) {
+      if (protectedNames.has(name)) continue;
       const next = wanted.get(name);
       if (!next || hashOf(next) !== entry.hash) {
         entry.dispose();

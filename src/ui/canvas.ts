@@ -18,12 +18,11 @@ import {
   planBounds,
   pointInRect,
   roomRect,
-  wallPoint,
-  wallSegments,
+  wallRuns,
 } from '../core/geometry';
 import type { Analysis } from '../core/rules';
 import { store } from '../core/store';
-import type { Furniture, Opening, Plan, Rect, Room } from '../core/types';
+import type { Furniture, Opening, Plan, Rect } from '../core/types';
 
 const PAPER = '#fbfaf7';
 const GRIDLINE = '#e9e4da';
@@ -55,11 +54,19 @@ export class PlanCanvas {
     | { kind: 'opening'; id: string; start: number; grab: number; moved: boolean }
     | null = null;
   private hover: string | null = null;
-  private fitted = false;
+  /** Cleared by fit(); set the moment the user pans or zooms by hand. */
+  private userAdjusted = false;
 
   constructor(host: HTMLElement) {
     this.el = document.createElement('canvas');
     this.el.className = 'sheet';
+    // A drawing surface is unusable by keyboard unless we say so and mean it.
+    this.el.tabIndex = 0;
+    this.el.setAttribute('role', 'application');
+    this.el.setAttribute(
+      'aria-label',
+      'Floor plan drawing. Press the full stop and comma keys to move between rooms, doors and furniture; arrow keys to move the selection; Escape to deselect; plus and minus to zoom; zero to fit.',
+    );
     host.appendChild(this.el);
     const ctx = this.el.getContext('2d');
     if (!ctx) throw new Error('This browser cannot give us a 2D canvas.');
@@ -86,10 +93,12 @@ export class PlanCanvas {
     this.view.scale = scale;
     this.view.tx = w / 2 - (b.x + b.w / 2) * scale;
     this.view.ty = h / 2 - (b.y + b.h / 2) * scale;
+    this.userAdjusted = false;
     this.draw();
   }
 
   zoomBy(factor: number, cx?: number, cy?: number): void {
+    this.userAdjusted = true;
     const px = cx ?? this.el.clientWidth / 2;
     const py = cy ?? this.el.clientHeight / 2;
     const [wx, wy] = this.toWorld(px, py);
@@ -99,15 +108,20 @@ export class PlanCanvas {
     this.draw();
   }
 
+  /** The current view as a PNG data URL, for the export menu. */
+  toPng(): string {
+    return this.el.toDataURL('image/png');
+  }
+
   private resize(): void {
     this.dpr = Math.min(2, window.devicePixelRatio || 1);
     const w = this.el.clientWidth;
     const h = this.el.clientHeight;
     this.el.width = Math.max(1, Math.round(w * this.dpr));
     this.el.height = Math.max(1, Math.round(h * this.dpr));
-    // The first layout pass is the earliest moment a sensible zoom exists.
-    if (!this.fitted && w > 80 && h > 80) {
-      this.fitted = true;
+    // Stay fitted to the sheet until the user takes the view into their own
+    // hands. Layout settles over several frames, so one early fit is not enough.
+    if (!this.userAdjusted && w > 80 && h > 80) {
       this.fit();
       return;
     }
@@ -129,6 +143,108 @@ export class PlanCanvas {
       this.zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX - rect.left, e.clientY - rect.top);
     }, { passive: false });
     this.el.addEventListener('dblclick', () => this.fit());
+    this.el.addEventListener('keydown', (e) => this.onKey(e));
+  }
+
+  /**
+   * Keyboard equivalents for everything the mouse can do. A tool about
+   * accessible design that cannot itself be driven from the keyboard would be
+   * a poor advertisement for the idea.
+   */
+  private onKey(e: KeyboardEvent): void {
+    const step = e.shiftKey ? 10 : e.altKey ? 500 : 50;
+
+    if (e.key === '.' || e.key === ',') {
+      e.preventDefault();
+      this.cycleSelection(e.key === '.' ? 1 : -1);
+      return;
+    }
+    if (e.key === 'Escape') {
+      store.select(null);
+      return;
+    }
+    if (e.key === '+' || e.key === '=') {
+      e.preventDefault();
+      this.zoomBy(1.25);
+      return;
+    }
+    if (e.key === '-' || e.key === '_') {
+      e.preventDefault();
+      this.zoomBy(1 / 1.25);
+      return;
+    }
+    if (e.key === '0') {
+      e.preventDefault();
+      this.fit();
+      return;
+    }
+
+    const deltas: Record<string, [number, number]> = {
+      ArrowLeft: [-step, 0],
+      ArrowRight: [step, 0],
+      ArrowUp: [0, -step],
+      ArrowDown: [0, step],
+    };
+    const delta = deltas[e.key];
+    if (!delta) return;
+    e.preventDefault();
+    const sel = store.selection;
+    if (!sel) {
+      // Nothing selected: pan the sheet instead.
+      this.userAdjusted = true;
+      this.view.tx -= delta[0] * this.view.scale;
+      this.view.ty -= delta[1] * this.view.scale;
+      this.draw();
+      return;
+    }
+    store.commit(
+      'Nudged the selection',
+      'human',
+      (draft) => {
+        if (sel.kind === 'furniture') {
+          const f = draft.furniture.find((x) => x.id === sel.id);
+          if (!f) return false;
+          f.cx += delta[0];
+          f.cy += delta[1];
+          return undefined;
+        }
+        if (sel.kind === 'room') {
+          const room = draft.rooms.find((x) => x.id === sel.id);
+          if (!room) return false;
+          room.x += delta[0];
+          room.y += delta[1];
+          for (const f of draft.furniture) {
+            if (pointInRect(f.cx - delta[0], f.cy - delta[1], roomRect(room))) {
+              f.cx += delta[0];
+              f.cy += delta[1];
+            }
+          }
+          return undefined;
+        }
+        const op = draft.openings.find((x) => x.id === sel.id);
+        const host = op && draft.rooms.find((r) => r.id === op.roomId);
+        if (!op || !host) return false;
+        const along = op.side === 'n' || op.side === 's' ? delta[0] : delta[1];
+        if (along === 0) return false;
+        const len = op.side === 'n' || op.side === 's' ? host.w : host.h;
+        op.offset = Math.max(50, Math.min(len - op.width - 50, op.offset + along));
+        return undefined;
+      },
+    );
+  }
+
+  /** Walks the selection through every room, opening and item in turn. */
+  private cycleSelection(direction: 1 | -1): void {
+    const plan = store.plan;
+    const order: { kind: 'room' | 'opening' | 'furniture'; id: string }[] = [
+      ...plan.rooms.map((r) => ({ kind: 'room' as const, id: r.id })),
+      ...plan.openings.map((o) => ({ kind: 'opening' as const, id: o.id })),
+      ...plan.furniture.map((f) => ({ kind: 'furniture' as const, id: f.id })),
+    ];
+    if (order.length === 0) return;
+    const current = store.selection ? order.findIndex((x) => x.id === store.selection!.id) : -1;
+    const next = (current + direction + order.length) % order.length;
+    store.select(order[next]!);
   }
 
   private pointer(e: PointerEvent): [number, number] {
@@ -183,6 +299,7 @@ export class PlanCanvas {
     }
 
     if (this.drag.kind === 'pan') {
+      this.userAdjusted = true;
       this.view.tx = this.drag.tx + (e.clientX - rect.left - this.drag.x);
       this.view.ty = this.drag.ty + (e.clientY - rect.top - this.drag.y);
       this.draw();
@@ -293,6 +410,7 @@ export class PlanCanvas {
     this.drawLabels(plan, analysis);
     if (store.overlays.dimensions) this.drawDimensions(plan);
     this.drawIssueMarkers(analysis);
+    this.drawProposal(plan);
     this.drawSelection(plan);
     this.drawHighlight(plan);
 
@@ -395,51 +513,11 @@ export class PlanCanvas {
     ctx.restore();
   }
 
-  /**
-   * Walls are drawn as bands with the openings subtracted along their length.
-   * Shared walls are drawn once — the room with the lower id owns the band —
-   * so a partition never gets painted twice at half opacity.
-   */
   private drawWalls(plan: Plan): void {
     const ctx = this.ctx;
     ctx.save();
     ctx.fillStyle = WALL;
-    const holes = plan.openings
-      .map((op) => openingRect(plan, op))
-      .filter((r): r is Rect => r !== null);
-
-    for (const seg of wallSegments(plan)) {
-      if (seg.neighbourId && seg.roomId > seg.neighbourId) continue;
-      const band = segmentRect(plan, seg);
-      if (!band) continue;
-      const horizontal = seg.side === 'n' || seg.side === 's';
-      const from = horizontal ? band.x : band.y;
-      const to = horizontal ? band.x + band.w : band.y + band.h;
-
-      // Subtract every opening that punches through this band.
-      let runs: [number, number][] = [[from, to]];
-      for (const hole of holes) {
-        const acrossHit = horizontal
-          ? hole.y < band.y + band.h && hole.y + hole.h > band.y
-          : hole.x < band.x + band.w && hole.x + hole.w > band.x;
-        if (!acrossHit) continue;
-        const h0 = horizontal ? hole.x : hole.y;
-        const h1 = horizontal ? hole.x + hole.w : hole.y + hole.h;
-        runs = runs.flatMap(([a, b]) => {
-          if (h1 <= a || h0 >= b) return [[a, b] as [number, number]];
-          const out: [number, number][] = [];
-          if (h0 > a) out.push([a, h0]);
-          if (h1 < b) out.push([h1, b]);
-          return out;
-        });
-      }
-
-      for (const [a, b] of runs) {
-        if (b - a <= 0) continue;
-        if (horizontal) ctx.fillRect(a, band.y, b - a, band.h);
-        else ctx.fillRect(band.x, a, band.w, b - a);
-      }
-    }
+    for (const run of wallRuns(plan)) ctx.fillRect(run.x, run.y, run.w, run.h);
     ctx.restore();
   }
 
@@ -623,6 +701,97 @@ export class PlanCanvas {
     ctx.restore();
   }
 
+  /**
+   * Draws the change an agent is asking for, on the drawing itself, before it
+   * exists. Violet is what the agent proposes; red is what it wants to remove.
+   * Reading a list of edits is not the same as seeing where they land.
+   */
+  private drawProposal(plan: Plan): void {
+    const proposal = store.proposal;
+    if (!proposal) return;
+    const next = proposal.next;
+    const ctx = this.ctx;
+
+    ctx.save();
+    ctx.lineWidth = 44;
+    ctx.setLineDash([220, 150]);
+    ctx.lineJoin = 'round';
+
+    const ghost = (rect: Rect, removed: boolean) => {
+      ctx.strokeStyle = removed ? ERROR : AGENT;
+      ctx.fillStyle = removed ? 'rgba(200, 55, 47, 0.12)' : 'rgba(154, 108, 240, 0.14)';
+      roundRect(ctx, grow(rect, 60), 90);
+      ctx.fill();
+      ctx.stroke();
+    };
+
+    const arrow = (from: { x: number; y: number }, to: { x: number; y: number }) => {
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 200) return;
+      ctx.save();
+      ctx.setLineDash([]);
+      ctx.strokeStyle = AGENT;
+      ctx.lineWidth = 36;
+      ctx.beginPath();
+      ctx.moveTo(from.x, from.y);
+      ctx.lineTo(to.x, to.y);
+      ctx.stroke();
+      const a = Math.atan2(dy, dx);
+      const head = 220;
+      ctx.beginPath();
+      ctx.moveTo(to.x, to.y);
+      ctx.lineTo(to.x - Math.cos(a - 0.4) * head, to.y - Math.sin(a - 0.4) * head);
+      ctx.moveTo(to.x, to.y);
+      ctx.lineTo(to.x - Math.cos(a + 0.4) * head, to.y - Math.sin(a + 0.4) * head);
+      ctx.stroke();
+      ctx.restore();
+    };
+
+    const roomsBefore = new Map(plan.rooms.map((r) => [r.id, r]));
+    for (const r of next.rooms) {
+      const prev = roomsBefore.get(r.id);
+      if (!prev) ghost(roomRect(r), false);
+      else if (prev.x !== r.x || prev.y !== r.y || prev.w !== r.w || prev.h !== r.h) {
+        ghost(roomRect(r), false);
+        arrow(rectCentreOf(roomRect(prev)), rectCentreOf(roomRect(r)));
+      }
+    }
+    const roomsAfter = new Set(next.rooms.map((r) => r.id));
+    for (const r of plan.rooms) if (!roomsAfter.has(r.id)) ghost(roomRect(r), true);
+
+    const opsBefore = new Map(plan.openings.map((o) => [o.id, o]));
+    for (const o of next.openings) {
+      const prev = opsBefore.get(o.id);
+      const changed =
+        !prev || prev.width !== o.width || prev.offset !== o.offset || prev.side !== o.side;
+      if (!changed) continue;
+      const rect = openingRect(next, o);
+      if (rect) ghost(rect, false);
+    }
+    const opsAfter = new Set(next.openings.map((o) => o.id));
+    for (const o of plan.openings) {
+      if (opsAfter.has(o.id)) continue;
+      const rect = openingRect(plan, o);
+      if (rect) ghost(rect, true);
+    }
+
+    const furBefore = new Map(plan.furniture.map((f) => [f.id, f]));
+    for (const f of next.furniture) {
+      const prev = furBefore.get(f.id);
+      if (!prev) ghost(furnitureRect(f), false);
+      else if (prev.cx !== f.cx || prev.cy !== f.cy || prev.rot !== f.rot) {
+        ghost(furnitureRect(f), false);
+        arrow({ x: prev.cx, y: prev.cy }, { x: f.cx, y: f.cy });
+      }
+    }
+    const furAfter = new Set(next.furniture.map((f) => f.id));
+    for (const f of plan.furniture) if (!furAfter.has(f.id)) ghost(furnitureRect(f), true);
+
+    ctx.restore();
+  }
+
   private drawSelection(plan: Plan): void {
     const sel = store.selection;
     if (!sel) return;
@@ -641,7 +810,8 @@ export class PlanCanvas {
     const hl = store.highlight;
     if (!hl || hl.until < Date.now()) return;
     const ctx = this.ctx;
-    const phase = (Math.sin(Date.now() / 220) + 1) / 2;
+    const still = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    const phase = still ? 0.6 : (Math.sin(Date.now() / 220) + 1) / 2;
     ctx.save();
     ctx.strokeStyle = AGENT;
     ctx.globalAlpha = 0.45 + phase * 0.5;
@@ -654,7 +824,7 @@ export class PlanCanvas {
       ctx.stroke();
     }
     ctx.restore();
-    requestAnimationFrame(() => this.draw());
+    if (!still) requestAnimationFrame(() => this.draw());
   }
 
   private rectOf(plan: Plan, kind: string, id: string): Rect | null {
@@ -679,6 +849,10 @@ function clampTo(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
+function rectCentreOf(r: Rect): { x: number; y: number } {
+  return { x: r.x + r.w / 2, y: r.y + r.h / 2 };
+}
+
 function grow(r: Rect, amount: number): Rect {
   return { x: r.x - amount, y: r.y - amount, w: r.w + amount * 2, h: r.h + amount * 2 };
 }
@@ -692,18 +866,6 @@ function roundRect(ctx: CanvasRenderingContext2D, r: Rect, radius: number): void
   ctx.arcTo(r.x, r.y + r.h, r.x, r.y, rad);
   ctx.arcTo(r.x, r.y, r.x + r.w, r.y, rad);
   ctx.closePath();
-}
-
-function segmentRect(plan: Plan, seg: { roomId: string; side: string; neighbourId: string | null; start: number; end: number }): Rect | null {
-  const room = plan.rooms.find((r) => r.id === seg.roomId) as Room | undefined;
-  if (!room) return null;
-  const t = seg.neighbourId ? plan.settings.interiorWall : plan.settings.exteriorWall;
-  const a = wallPoint(room, seg.side as 'n' | 'e' | 's' | 'w', seg.start);
-  const b = wallPoint(room, seg.side as 'n' | 'e' | 's' | 'w', seg.end);
-  const horizontal = seg.side === 'n' || seg.side === 's';
-  return horizontal
-    ? { x: a.x, y: a.y - t / 2, w: b.x - a.x, h: t }
-    : { x: a.x - t / 2, y: a.y, w: t, h: b.y - a.y };
 }
 
 /** Which way a piece of furniture faces, as a compass letter. */

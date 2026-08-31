@@ -134,3 +134,65 @@ export function shellPlan(): Plan {
     settings: { ...DEFAULT_SETTINGS },
   };
 }
+
+/**
+ * What good looks like.
+ *
+ * A single-storey home designed to the same standards the rule engine checks:
+ * 1000 mm doorways throughout, a 1600 mm corridor, a turning circle in every
+ * room that needs one, daylight and an escape window in every habitable room.
+ * It exists so the app can show a clean bill of health, not only a list of
+ * faults — and so an agent has a worked example to reason from.
+ */
+export function accessiblePlan(): Plan {
+  n = 0;
+  const living = room('Living room', 'living', 0, 0, 5000, 4200);
+  const kitchen = room('Kitchen', 'kitchen', 5000, 0, 3600, 4200);
+  const hall = room('Hall', 'hall', 0, 4200, 8600, 1600);
+  const bed = room('Bedroom', 'bedroom', 0, 5800, 4200, 3600);
+  const bath = room('Wet room', 'bathroom', 4200, 5800, 2800, 3600);
+  const store = room('Store', 'storage', 7000, 5800, 1600, 3600);
+
+  return {
+    id: 'plan_accessible',
+    name: 'Willow Bungalow — designed for a wheelchair',
+    rooms: [living, kitchen, hall, bed, bath, store],
+    openings: [
+      door(hall.id, 'w', 300, 1000, 'e'),
+      door(living.id, 's', 1800, 1600, 'none'),
+      door(kitchen.id, 'w', 1200, 1600, 'none'),
+      door(kitchen.id, 's', 400, 1000, 'n'),
+      door(bed.id, 'n', 2800, 1000, 's'),
+      door(bath.id, 'n', 700, 1000, 's'),
+      door(store.id, 'n', 300, 1000, 's'),
+
+      win(living.id, 'n', 1000, 2400),
+      win(living.id, 'w', 1200, 1200),
+      win(kitchen.id, 'n', 800, 1600),
+      win(bed.id, 's', 1000, 2000),
+      win(bath.id, 's', 1600, 800),
+    ],
+    furniture: [
+      place('sofa_3', 1400, 700, 0),
+      place('coffee_table', 1400, 2200, 0),
+      place('armchair', 3600, 1200, 90),
+      place('bookshelf', 800, 3900, 180),
+
+      place('sink_kitchen', 5500, 400, 0),
+      place('oven', 6400, 400, 0),
+      place('fridge', 7600, 425, 0),
+      place('dining_table_4', 8100, 3300, 90),
+
+      place('bed_double', 1100, 6700, 270),
+      place('wardrobe', 900, 8000, 0),
+      place('bedside', 2350, 6100, 0),
+
+      place('wc', 4550, 7000, 270),
+      place('basin', 6775, 6400, 90),
+      place('shower', 4700, 8900, 180),
+
+      place('shoe_rack', 800, 4400, 0),
+    ],
+    settings: { ...DEFAULT_SETTINGS },
+  };
+}

@@ -25,7 +25,9 @@ import {
   setOpeningWidth,
   setRoomType,
 } from '../core/ops';
-import { shellPlan, starterPlan } from '../core/samples';
+import { accessiblePlan, shellPlan, starterPlan } from '../core/samples';
+import { download, shareLink, slug } from '../core/share';
+import { planToSchedule, planToSvg } from '../core/svg';
 import { store, type Mode } from '../core/store';
 import type { RoomType, Side, Violation } from '../core/types';
 import { host, type ToolSpec } from '../mcp/runtime';
@@ -80,18 +82,26 @@ export function mountApp(root: HTMLElement): PlanCanvas {
   const rail = h('aside', { class: 'rail' });
   const dock = h('div', { class: 'dock' });
   const overlay = h('div', { class: 'overlay-layer' });
+  // Screen readers get the same running commentary the header shows visually.
+  const live = h('div', { class: 'sr-only', 'aria-live': 'polite', 'aria-atomic': 'true' });
 
   stage.append(sheetHost, rail);
-  root.append(header, stage, dock, overlay);
+  root.append(header, stage, dock, overlay, live);
 
   canvas = new PlanCanvas(sheetHost);
   requestAnimationFrame(() => canvas.fit());
 
+  let lastSpoken = '';
   const render = () => {
     renderHeader(header);
     renderRail(rail);
     renderDock(dock);
     renderOverlay(overlay);
+    const spoken = announcement();
+    if (spoken !== lastSpoken) {
+      lastSpoken = spoken;
+      live.textContent = spoken;
+    }
   };
 
   store.subscribe(render);
@@ -99,6 +109,31 @@ export function mountApp(root: HTMLElement): PlanCanvas {
   render();
   bindKeys();
   return canvas;
+}
+
+/** One sentence describing the current state, for the live region. */
+function announcement(): string {
+  const a = store.analysis;
+  const sel = store.selection;
+  const counts = `${a.stats.errorCount} error${a.stats.errorCount === 1 ? '' : 's'}, ${
+    a.stats.warningCount
+  } warning${a.stats.warningCount === 1 ? '' : 's'}.`;
+  if (store.proposal) return `An agent is proposing: ${store.proposal.title}. Approve or discard. ${counts}`;
+  if (!sel) return counts;
+  if (sel.kind === 'room') {
+    const room = findRoom(store.plan, sel.id);
+    const stat = a.rooms.find((r) => r.id === sel.id);
+    if (!room) return counts;
+    return `Selected ${room.name}, ${areaM2(roomRect(room))} square metres, turning circle ${
+      stat?.turningCircleMm ?? 0
+    } millimetres, ${Math.round((stat?.reachRatio ?? 0) * 100)} percent reachable. ${counts}`;
+  }
+  if (sel.kind === 'furniture') {
+    const f = findFurniture(store.plan, sel.id);
+    return f ? `Selected ${f.label}, ${f.w} by ${f.h} millimetres. ${counts}` : counts;
+  }
+  const op = findOpening(store.plan, sel.id);
+  return op ? `Selected a ${op.kind}, ${op.width} millimetres wide. ${counts}` : counts;
 }
 
 function bindKeys(): void {
@@ -189,6 +224,7 @@ function renderHeader(node: HTMLElement): void {
           'button',
           {
             class: `mode ${store.mode === m ? 'on' : ''}`,
+            'aria-pressed': store.mode === m ? 'true' : 'false',
             title:
               m === 'review'
                 ? 'Review mode unregisters every editing tool — the agent can look but not touch.'
@@ -203,13 +239,34 @@ function renderHeader(node: HTMLElement): void {
     h(
       'div',
       { class: 'header-actions' },
-      h('button', { class: 'ghost', disabled: !store.canUndo, onclick: () => store.undo(), title: 'Undo (Ctrl+Z)' }, '↺'),
-      h('button', { class: 'ghost', disabled: !store.canRedo, onclick: () => store.redo(), title: 'Redo' }, '↻'),
+      h(
+        'button',
+        {
+          class: 'ghost',
+          disabled: !store.canUndo,
+          onclick: () => store.undo(),
+          title: 'Undo (Ctrl+Z)',
+          'aria-label': 'Undo the last change',
+        },
+        '↺',
+      ),
+      h(
+        'button',
+        {
+          class: 'ghost',
+          disabled: !store.canRedo,
+          onclick: () => store.redo(),
+          title: 'Redo',
+          'aria-label': 'Redo',
+        },
+        '↻',
+      ),
       h(
         'button',
         {
           class: 'ghost',
           title: 'How to drive this with an agent',
+          'aria-label': 'How to drive this with an agent',
           onclick: () => {
             helpOpen = true;
             store.emit();
@@ -249,7 +306,7 @@ function metric(value: string, label: string, tone = ''): HTMLElement {
 function renderRail(node: HTMLElement): void {
   const tabs = h(
     'div',
-    { class: 'tabs' },
+    { class: 'tabs', role: 'tablist' },
     ...(
       [
         ['issues', `Findings (${store.analysis.violations.length})`],
@@ -261,6 +318,8 @@ function renderRail(node: HTMLElement): void {
         'button',
         {
           class: `tab ${tab === key ? 'on' : ''}`,
+          role: 'tab',
+          'aria-selected': tab === key ? 'true' : 'false',
           onclick: () => {
             tab = key;
             store.emit();
@@ -271,7 +330,19 @@ function renderRail(node: HTMLElement): void {
     ),
   );
 
-  fill(node, tabs, h('div', { class: 'rail-body' }, tab === 'issues' ? issuesPanel() : tab === 'activity' ? activityPanel() : toolsPanel()));
+  // The approval card lives above the tabs rather than floating over the sheet:
+  // the drawing is already showing the proposed change, and covering it up
+  // would defeat the point.
+  fill(
+    node,
+    approvalCard(),
+    tabs,
+    h(
+      'div',
+      { class: 'rail-body' },
+      tab === 'issues' ? issuesPanel() : tab === 'activity' ? activityPanel() : toolsPanel(),
+    ),
+  );
 }
 
 function issuesPanel(): HTMLElement {
@@ -451,7 +522,16 @@ function toolCard(spec: ToolSpec): HTMLElement {
     h(
       'header',
       {
+        role: 'button',
+        tabindex: '0',
+        'aria-expanded': open ? 'true' : 'false',
         onclick: () => {
+          toolRunnerFor = open ? null : spec.name;
+          store.emit();
+        },
+        onkeydown: (e: KeyboardEvent) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return;
+          e.preventDefault();
           toolRunnerFor = open ? null : spec.name;
           store.emit();
         },
@@ -571,20 +651,71 @@ function renderDock(node: HTMLElement): void {
         'select',
         {
           class: 'ghost small',
+          'aria-label': 'Load a starter plan',
           onchange: (e: Event) => {
-            const v = (e.target as HTMLSelectElement).value;
+            const select = e.target as HTMLSelectElement;
+            const v = select.value;
+            select.value = '';
             if (!v) return;
-            store.reset(v === 'shell' ? shellPlan() : starterPlan());
+            store.reset(v === 'shell' ? shellPlan() : v === 'accessible' ? accessiblePlan() : starterPlan());
             requestAnimationFrame(() => canvas.fit());
-            (e.target as HTMLSelectElement).value = '';
           },
         },
         h('option', { value: '' }, 'Load…'),
-        h('option', { value: 'apartment' }, 'Two-bed flat'),
+        h('option', { value: 'apartment' }, 'Two-bed flat (has faults)'),
+        h('option', { value: 'accessible' }, 'Accessible bungalow (passes)'),
         h('option', { value: 'shell' }, 'Empty shell'),
+      ),
+      h(
+        'select',
+        {
+          class: 'ghost small',
+          'aria-label': 'Export the plan',
+          onchange: (e: Event) => {
+            const select = e.target as HTMLSelectElement;
+            const v = select.value;
+            select.value = '';
+            void runExport(v);
+          },
+        },
+        h('option', { value: '' }, 'Export…'),
+        h('option', { value: 'svg' }, 'SVG drawing'),
+        h('option', { value: 'png' }, 'PNG of this view'),
+        h('option', { value: 'schedule' }, 'Room schedule (markdown)'),
+        h('option', { value: 'link' }, 'Copy share link'),
       ),
     ),
   );
+}
+
+/**
+ * Everything a person might want to take away with them. The share link
+ * carries the whole drawing in the URL, so it works with no server behind it.
+ */
+async function runExport(kind: string): Promise<void> {
+  const plan = store.plan;
+  const name = slug(plan.name);
+  if (kind === 'svg') {
+    download(`${name}.svg`, planToSvg(plan, { analysis: store.analysis, annotate: true }), 'image/svg+xml');
+  } else if (kind === 'schedule') {
+    download(`${name}-schedule.md`, planToSchedule(plan, store.analysis), 'text/markdown');
+  } else if (kind === 'png') {
+    const url = canvas.toPng();
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${name}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } else if (kind === 'link') {
+    const url = await shareLink(plan);
+    try {
+      await navigator.clipboard.writeText(url);
+      store.note('Copied a share link', 'human', 'The whole plan travels in the URL.');
+    } catch {
+      window.prompt('Copy this link:', url);
+    }
+  }
 }
 
 function toggle(key: keyof typeof store.overlays, label: string, title?: string): HTMLElement {
@@ -606,7 +737,7 @@ function toggle(key: keyof typeof store.overlays, label: string, title?: string)
 // ── Floating layer: inspector + approval ─────────────────────────────────────
 
 function renderOverlay(node: HTMLElement): void {
-  fill(node, inspectorCard(), agentPresence(), approvalCard(), helpCard());
+  fill(node, inspectorCard(), agentPresence(), helpCard());
 }
 
 function agentPresence(): HTMLElement | null {
@@ -895,6 +1026,10 @@ function paletteCard(): HTMLElement {
   );
 }
 
+function truncate(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`;
+}
+
 function numberField(label: string, value: number, onCommit: (v: number) => void): HTMLElement {
   return h(
     'label',
@@ -977,7 +1112,7 @@ function approvalCard(): HTMLElement | null {
   if (!p) return null;
   return h(
     'div',
-    { class: 'approval' },
+    { class: 'approval', role: 'dialog', 'aria-label': 'Change proposed by an agent' },
     h(
       'header',
       {},
@@ -985,9 +1120,14 @@ function approvalCard(): HTMLElement | null {
       h('h3', {}, p.title),
       h('code', {}, p.tool),
     ),
-    h('p', {}, p.summary),
-    h('ul', { class: 'changes' }, ...p.changes.slice(0, 8).map((c) => h('li', {}, c))),
-    p.changes.length > 8 ? h('p', { class: 'sub' }, `…and ${p.changes.length - 8} more.`) : null,
+    h(
+      'div',
+      { class: 'approval-body' },
+      h('p', {}, truncate(p.summary, 260)),
+      h('ul', { class: 'changes' }, ...p.changes.slice(0, 8).map((c) => h('li', {}, c))),
+      p.changes.length > 8 ? h('p', { class: 'sub' }, `…and ${p.changes.length - 8} more.`) : null,
+      h('p', { class: 'ghost-note' }, 'Drawn on the plan in violet. Red means it would be removed.'),
+    ),
     h(
       'div',
       { class: 'approval-actions' },

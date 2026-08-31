@@ -10,7 +10,8 @@
  */
 
 import { OPPOSITE, furnitureRect, rectsOverlap, roomRect, wallSegments } from './geometry';
-import { maxClearanceIn, rasterise } from './grid';
+import { maxClearanceIn, rasterise, reachableFrom, roomReachRatio, widestPaths } from './grid';
+import { findBottleneck } from './rules';
 import {
   addFurniture,
   addOpening,
@@ -77,33 +78,69 @@ function widenDoor(plan: Plan, openingId: string, target: number): FixOutcome {
   return res.ok ? ok([res.message]) : no(res.error);
 }
 
-/** Widens every door on the walls of an unreachable room until it connects. */
+/**
+ * Opens the route to a stranded room by widening whatever is actually pinching
+ * it — not every door in the flat. Each pass re-measures, so a plan with two
+ * bottlenecks in series gets both, and the loop stops the moment the room
+ * connects.
+ */
 function openRouteTo(plan: Plan, roomId: string): FixOutcome {
   const room = plan.rooms.find((r) => r.id === roomId);
   if (!room) return no('That room is gone.');
   const target = Math.max(plan.settings.minClearDoor + 85, plan.settings.mobilityRadius * 2 + 100);
-  const touching = plan.openings.filter(
-    (o) => o.kind !== 'window' && (o.roomId === room.id || neighboursRoom(plan, o.id, room.id)),
-  );
-  if (touching.length === 0) return connectRoom(plan, roomId);
   const actions: string[] = [];
-  for (const op of touching) {
-    if (op.width >= target) continue;
-    const res = setOpeningWidth(plan, op.id, target);
-    if (res.ok) actions.push(res.message);
+
+  for (let pass = 0; pass < 4; pass++) {
+    const grid = rasterise(plan);
+    const reach = reachableFrom(plan, grid, plan.settings.mobilityRadius);
+    if (roomReachRatio(grid, reach, room) >= 0.05) {
+      actions.push(`"${room.name}" is now reachable from the entrance.`);
+      return ok(actions);
+    }
+    const neck = findBottleneck(plan, grid, widestPaths(grid, reach.seed), room);
+    if (!neck) {
+      const connected = connectRoom(plan, roomId);
+      return connected.applied ? ok([...actions, ...connected.actions]) : connected;
+    }
+    if (neck.openingId) {
+      const op = plan.openings.find((o) => o.id === neck.openingId);
+      if (op && op.width >= target) {
+        // The doorway is wide enough on paper; something is standing in it.
+        const intruder = blockerNear(plan, neck.at);
+        if (!intruder) break;
+        const moved = rehomeFurniture(plan, intruder.id);
+        if (!moved.applied) break;
+        actions.push(...moved.actions);
+        continue;
+      }
+      const res = setOpeningWidth(plan, neck.openingId, target);
+      if (!res.ok) break;
+      actions.push(`${res.message} (${neck.description}, the tightest point on the route)`);
+      continue;
+    }
+    const intruder = blockerNear(plan, neck.at);
+    if (!intruder) break;
+    const moved = rehomeFurniture(plan, intruder.id);
+    if (!moved.applied) break;
+    actions.push(...moved.actions);
   }
+
   if (actions.length === 0) {
-    return rehomeFurniture(plan, blockerIn(plan, room)?.id ?? '');
+    return no(`Could not find anything on the route to "${room.name}" that would help to widen.`);
   }
-  return ok(actions);
+  return {
+    applied: true,
+    actions: [...actions, 'The route is wider, but the room is still not fully connected — check the plan again.'],
+    reason: 'Partially fixed.',
+  };
 }
 
-function neighboursRoom(plan: Plan, openingId: string, roomId: string): boolean {
-  const op = plan.openings.find((o) => o.id === openingId);
-  if (!op) return false;
-  const segs = wallSegments(plan).filter((s) => s.roomId === op.roomId && s.side === op.side);
-  const mid = op.offset + op.width / 2;
-  return segs.some((s) => mid >= s.start && mid <= s.end && s.neighbourId === roomId);
+/** The largest thing sitting within a metre and a half of a pinch point. */
+function blockerNear(plan: Plan, at: { x: number; y: number }) {
+  return plan.furniture
+    .map((f) => ({ f, d: Math.hypot(f.cx - at.x, f.cy - at.y) }))
+    .filter((x) => x.d < 1500)
+    .sort((a, b) => b.f.w * b.f.h - a.f.w * a.f.h)[0]?.f;
 }
 
 function addEntryDoor(plan: Plan): FixOutcome {
@@ -238,12 +275,6 @@ function rehomeFurniture(plan: Plan, furnitureId: string): FixOutcome {
   const res = addFurniture(plan, { type, roomRef: room.id, label });
   if (!res.ok) return no(`Nowhere clear in "${room.name}" to re-park the ${label.toLowerCase()}.`);
   return ok([`Re-parked ${label.toLowerCase()} against a wall in "${room.name}".`]);
-}
-
-function blockerIn(plan: Plan, room: Room) {
-  return plan.furniture
-    .filter((f) => rectsOverlap(furnitureRect(f), roomRect(room), 1))
-    .sort((a, b) => b.w * b.h - a.w * a.h)[0];
 }
 
 /** Convenience for the tool layer: look a violation up by rule and entity. */

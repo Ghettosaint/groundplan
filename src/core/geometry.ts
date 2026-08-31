@@ -280,3 +280,59 @@ export function clamp(v: number, lo: number, hi: number): number {
 export function snapMm(v: number): number {
   return Math.round(v / 10) * 10;
 }
+
+/**
+ * Every stretch of wall as a solid rectangle, with the openings subtracted.
+ *
+ * Shared partitions are emitted once — the room with the lower id owns the band
+ * — so nothing is drawn twice. Both the canvas and the SVG export render from
+ * this, which is why an exported plan looks like what is on screen.
+ */
+export function wallRuns(plan: Plan): Rect[] {
+  const out: Rect[] = [];
+  const holes = plan.openings
+    .map((op) => openingRect(plan, op))
+    .filter((r): r is Rect => r !== null);
+
+  for (const seg of wallSegments(plan)) {
+    if (seg.neighbourId && seg.roomId > seg.neighbourId) continue;
+    const room = plan.rooms.find((r) => r.id === seg.roomId);
+    if (!room) continue;
+    const t = seg.neighbourId ? plan.settings.interiorWall : plan.settings.exteriorWall;
+    const a = wallPoint(room, seg.side, seg.start);
+    const b = wallPoint(room, seg.side, seg.end);
+    const horizontal = seg.side === 'n' || seg.side === 's';
+    const band: Rect = horizontal
+      ? { x: a.x, y: a.y - t / 2, w: b.x - a.x, h: t }
+      : { x: a.x - t / 2, y: a.y, w: t, h: b.y - a.y };
+
+    const from = horizontal ? band.x : band.y;
+    const to = horizontal ? band.x + band.w : band.y + band.h;
+    let runs: [number, number][] = [[from, to]];
+    for (const hole of holes) {
+      const acrossHit = horizontal
+        ? hole.y < band.y + band.h && hole.y + hole.h > band.y
+        : hole.x < band.x + band.w && hole.x + hole.w > band.x;
+      if (!acrossHit) continue;
+      const h0 = horizontal ? hole.x : hole.y;
+      const h1 = horizontal ? hole.x + hole.w : hole.y + hole.h;
+      runs = runs.flatMap(([lo, hi]) => {
+        if (h1 <= lo || h0 >= hi) return [[lo, hi] as [number, number]];
+        const kept: [number, number][] = [];
+        if (h0 > lo) kept.push([lo, h0]);
+        if (h1 < hi) kept.push([h1, hi]);
+        return kept;
+      });
+    }
+
+    for (const [lo, hi] of runs) {
+      if (hi - lo <= 0) continue;
+      out.push(
+        horizontal
+          ? { x: lo, y: band.y, w: hi - lo, h: band.h }
+          : { x: band.x, y: lo, w: band.w, h: hi - lo },
+      );
+    }
+  }
+  return out;
+}

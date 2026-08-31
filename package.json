@@ -8,7 +8,10 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --port 4173",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "docs:render": "vite-node scripts/render-docs.ts"
   },
   "dependencies": {
     "@mcp-b/global": "^5.1.0"
@@ -16,6 +19,7 @@
   "devDependencies": {
     "@types/node": "^26.4.0",
     "typescript": "^7.0.2",
-    "vite": "^8.2.2"
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11"
   }
 }

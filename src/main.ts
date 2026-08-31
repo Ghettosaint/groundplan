@@ -8,6 +8,7 @@
  */
 
 import './style.css';
+import { planFromLocation } from './core/share';
 import { store } from './core/store';
 import type { Plan } from './core/types';
 import { wireTools } from './mcp/tools';
@@ -48,6 +49,15 @@ if (!root) throw new Error('Missing #app root element.');
 const canvas = mountApp(root);
 persist();
 wireTools();
+
+// A shared link carries the whole drawing in its fragment, so it wins over
+// whatever draft was left in this browser.
+void planFromLocation().then((shared) => {
+  if (!shared) return;
+  store.reset(shared);
+  history.replaceState(null, '', location.pathname + location.search);
+  requestAnimationFrame(() => canvas.fit());
+});
 
 window.addEventListener('load', () => canvas.fit());
 

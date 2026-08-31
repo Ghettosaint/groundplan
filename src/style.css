@@ -341,13 +341,17 @@ code { font-family: var(--mono); font-size: 0.86em; }
 }
 
 .approval {
-  position: absolute; right: 396px; bottom: 68px; width: 380px;
-  background: rgba(26,21,38,0.98); backdrop-filter: blur(10px);
-  border: 1px solid var(--agent-dim); border-radius: 12px; padding: 15px;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.6);
-  display: grid; gap: 10px;
+  background: linear-gradient(180deg, #1e1830, #1a1526);
+  border-bottom: 1px solid var(--agent-dim);
+  border-left: 3px solid var(--agent);
+  padding: 14px 15px;
+  display: grid; gap: 9px;
   animation: rise 180ms ease-out;
+  max-height: 58vh;
+  grid-template-rows: auto minmax(0, 1fr) auto;
 }
+.approval-body { overflow-y: auto; display: grid; gap: 8px; min-height: 0; }
+.ghost-note { font-size: 11.5px; color: var(--agent); opacity: 0.85; }
 @keyframes rise { from { transform: translateY(10px); opacity: 0; } to { transform: none; opacity: 1; } }
 .approval header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .approval h3 { margin: 0; font-size: 14px; flex: 1 1 100%; order: 2; }
@@ -365,7 +369,6 @@ code { font-family: var(--mono); font-size: 0.86em; }
 @media (max-width: 1080px) {
   .stage { grid-template-columns: 1fr; grid-template-rows: minmax(220px, 1fr) minmax(180px, 42vh); }
   .rail { border-left: none; border-top: 1px solid var(--line); }
-  .approval { right: 16px; bottom: 16px; width: min(380px, calc(100vw - 32px)); }
   /* The floating cards would sit on top of the rail once it moves underneath. */
   .inspector, .inspector.palette, .inspector.palette.collapsed { display: none; }
   .metrics { display: none; }
@@ -409,3 +412,26 @@ code { font-family: var(--mono); font-size: 0.86em; }
 .legend .swatch.bad { background: #c63c30; }
 .legend .swatch.warn { background: #d69426; }
 .legend .swatch.good { background: #2e8a6a; }
+
+/* ── Accessibility ───────────────────────────────────────────────────────── */
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+.sheet:focus-visible { outline-offset: -3px; }
+.tool header { cursor: pointer; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

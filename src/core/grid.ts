@@ -406,3 +406,154 @@ export function swingRects(plan: Plan): { id: string; rect: Rect }[] {
   }
   return out;
 }
+
+// ── Widest-path routing ──────────────────────────────────────────────────────
+
+/**
+ * For every square of floor: the widest body that could ever get there from the
+ * entrance, and the cell it came from.
+ *
+ * This is a max-min (bottleneck) shortest path — Dijkstra with `min` in place of
+ * `+` and a max-heap. It answers the question a reachability flood fill cannot:
+ * not merely *whether* a room is cut off, but **what exactly is pinching the
+ * route, and by how much**. That single number is the difference between a tool
+ * telling an agent "the bathroom is unreachable" and telling it "the bathroom
+ * door is 760 mm; make it 900 and the route opens".
+ */
+export interface RouteField {
+  /** Widest body, as a radius in mm, that can reach each cell. 0 = never. */
+  width: Float32Array;
+  /** Predecessor cell on the widest path, or -1. */
+  prev: Int32Array;
+  seed: number;
+}
+
+export function widestPaths(g: Grid, seed: number): RouteField {
+  const n = g.cols * g.rows;
+  const width = new Float32Array(n);
+  const prev = new Int32Array(n).fill(-1);
+  if (seed < 0 || seed >= n || g.clearance[seed]! <= 0) return { width, prev, seed: -1 };
+
+  // Lazy-deletion binary max-heap over (key, cell).
+  const keys: number[] = [];
+  const cells: number[] = [];
+  const push = (key: number, cell: number) => {
+    keys.push(key);
+    cells.push(cell);
+    let i = keys.length - 1;
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      if (keys[parent]! >= keys[i]!) break;
+      [keys[parent], keys[i]] = [keys[i]!, keys[parent]!];
+      [cells[parent], cells[i]] = [cells[i]!, cells[parent]!];
+      i = parent;
+    }
+  };
+  const pop = (): [number, number] => {
+    const topKey = keys[0]!;
+    const topCell = cells[0]!;
+    const lastKey = keys.pop()!;
+    const lastCell = cells.pop()!;
+    if (keys.length > 0) {
+      keys[0] = lastKey;
+      cells[0] = lastCell;
+      let i = 0;
+      for (;;) {
+        const l = i * 2 + 1;
+        const r = l + 1;
+        let best = i;
+        if (l < keys.length && keys[l]! > keys[best]!) best = l;
+        if (r < keys.length && keys[r]! > keys[best]!) best = r;
+        if (best === i) break;
+        [keys[best], keys[i]] = [keys[i]!, keys[best]!];
+        [cells[best], cells[i]] = [cells[i]!, cells[best]!];
+        i = best;
+      }
+    }
+    return [topKey, topCell];
+  };
+
+  width[seed] = g.clearance[seed]!;
+  push(width[seed]!, seed);
+
+  while (keys.length > 0) {
+    const [key, u] = pop();
+    if (key < width[u]!) continue; // stale entry
+    const ux = u % g.cols;
+    const uy = (u - ux) / g.cols;
+    for (let k = 0; k < 4; k++) {
+      const nx = ux + (k === 0 ? 1 : k === 1 ? -1 : 0);
+      const ny = uy + (k === 2 ? 1 : k === 3 ? -1 : 0);
+      if (nx < 0 || ny < 0 || nx >= g.cols || ny >= g.rows) continue;
+      const v = ny * g.cols + nx;
+      const clear = g.clearance[v]!;
+      if (clear <= 0) continue;
+      const through = Math.min(width[u]!, clear);
+      if (through > width[v]!) {
+        width[v] = through;
+        prev[v] = u;
+        push(through, v);
+      }
+    }
+  }
+  return { width, prev, seed };
+}
+
+export interface RouteResult {
+  /** Widest body radius that can reach the target, mm. */
+  radiusMm: number;
+  /** The same as a passage width — what a person would measure. */
+  widthMm: number;
+  /** World position of the tightest point on that route. */
+  pinch: { x: number; y: number };
+  /** Cells along the route, entrance first. */
+  path: number[];
+}
+
+/** The best route from the entrance into a rectangle, and where it pinches. */
+export function routeInto(g: Grid, field: RouteField, r: Rect): RouteResult | null {
+  if (field.seed < 0) return null;
+  const x0 = Math.max(0, Math.floor((r.x - g.ox) / g.cell));
+  const y0 = Math.max(0, Math.floor((r.y - g.oy) / g.cell));
+  const x1 = Math.min(g.cols - 1, Math.floor((r.x + r.w - g.ox) / g.cell));
+  const y1 = Math.min(g.rows - 1, Math.floor((r.y + r.h - g.oy) / g.cell));
+
+  let bestCell = -1;
+  let bestWidth = 0;
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const i = y * g.cols + x;
+      if (field.width[i]! > bestWidth) {
+        bestWidth = field.width[i]!;
+        bestCell = i;
+      }
+    }
+  }
+  if (bestCell < 0) return null;
+
+  // Walk back to the entrance, noting where the route is at its tightest.
+  const path: number[] = [];
+  let cursor = bestCell;
+  let pinchCell = bestCell;
+  let pinchValue = Infinity;
+  let guard = 0;
+  while (cursor >= 0 && guard++ < g.cols * g.rows) {
+    path.push(cursor);
+    const clear = g.clearance[cursor]!;
+    if (clear < pinchValue) {
+      pinchValue = clear;
+      pinchCell = cursor;
+    }
+    cursor = field.prev[cursor]!;
+  }
+  path.reverse();
+
+  const px = pinchCell % g.cols;
+  const py = (pinchCell - px) / g.cols;
+  return {
+    radiusMm: Math.round(bestWidth),
+    widthMm: Math.round(bestWidth * 2),
+    pinch: { x: g.ox + (px + 0.5) * g.cell, y: g.oy + (py + 0.5) * g.cell },
+    path,
+  };
+}
