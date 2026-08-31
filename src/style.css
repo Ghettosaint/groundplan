@@ -496,3 +496,18 @@ button.small.icon { padding: 4px 8px; }
   background: rgba(63, 160, 122, 0.12); color: #cdeee0;
   font-size: 15px; pointer-events: none;
 }
+
+/*
+ * Last word on the narrow layout. The floating cards are positioned against a
+ * side rail; once the rail moves underneath the drawing they have nothing to
+ * sit beside, so they go. This block lives at the end deliberately — rules
+ * added later in the file would otherwise win on equal specificity.
+ */
+@media (max-width: 1080px) {
+  .inspector,
+  .inspector.palette,
+  .inspector.palette.collapsed {
+    display: none;
+  }
+  .presence { top: 8px; font-size: 12px; }
+}
