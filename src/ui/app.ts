@@ -29,8 +29,8 @@ import { accessiblePlan, shellPlan, starterPlan } from '../core/samples';
 import { describeJourney, planJourney } from '../core/route';
 import { download, shareLink, slug } from '../core/share';
 import { planToSchedule, planToSvg } from '../core/svg';
-import { store, type Mode } from '../core/store';
-import type { RoomType, Side, Violation } from '../core/types';
+import { store } from '../core/store';
+import type { Plan, RoomType, Side, Violation } from '../core/types';
 import { host, type ToolSpec } from '../mcp/runtime';
 import { PlanCanvas } from './canvas';
 
@@ -41,6 +41,7 @@ let canvas: PlanCanvas;
 let toolRunnerFor: string | null = null;
 let toolResult: { name: string; text: string } | null = null;
 let paletteOpen = false;
+let paletteTab: 'rooms' | 'furniture' = 'rooms';
 let helpOpen = localStorage.getItem('groundplan.seen.v1') !== 'yes';
 
 // ── Tiny DOM helper ──────────────────────────────────────────────────────────
@@ -163,22 +164,24 @@ function bindKeys(): void {
 
 // ── Header ───────────────────────────────────────────────────────────────────
 
+/**
+ * The top bar carries only what a person needs at a glance: what the plan is
+ * called, how it is doing, whether an agent may edit it, and whether a Model
+ * Context host is listening. Everything else lives where it is used.
+ */
 function renderHeader(node: HTMLElement): void {
   const a = store.analysis;
   const status = host.status;
   const badgeLabel =
-    status === 'native'
-      ? 'WebMCP · native'
-      : status === 'polyfill'
-        ? 'WebMCP · polyfill'
-        : 'WebMCP · unavailable';
+    status === 'native' ? 'WebMCP' : status === 'polyfill' ? 'WebMCP' : 'No agent host';
+  const readOnly = store.mode === 'review';
 
   fill(
     node,
     h(
       'div',
       { class: 'brand' },
-      h('div', { class: 'mark', title: 'Groundplan' }, '▤'),
+      h('div', { class: 'mark', title: 'Groundplan' }, '\u25a4'),
       h(
         'div',
         {},
@@ -187,54 +190,41 @@ function renderHeader(node: HTMLElement): void {
       ),
     ),
 
+    h('input', {
+      class: 'name-input',
+      value: store.plan.name,
+      'aria-label': 'Plan name',
+      onchange: (e: Event) => {
+        const v = (e.target as HTMLInputElement).value;
+        store.commit('Renamed the plan', 'human', (d) => {
+          d.name = v;
+        });
+      },
+    }),
+
     h(
-      'div',
-      { class: 'plan-name' },
-      h('input', {
-        class: 'name-input',
-        value: store.plan.name,
-        'aria-label': 'Plan name',
-        onchange: (e: Event) => {
-          const v = (e.target as HTMLInputElement).value;
-          store.commit('Renamed the plan', 'human', (d) => {
-            d.name = v;
-          });
+      'button',
+      {
+        class: 'health',
+        title: 'Jump to the findings',
+        onclick: () => {
+          tab = 'issues';
+          store.emit();
         },
-      }),
-    ),
-
-    h(
-      'div',
-      { class: 'scorebar' },
+      },
       scoreChip(a.stats.score),
-      h(
-        'div',
-        { class: 'metrics' },
-        metric(`${a.stats.errorCount}`, 'errors', a.stats.errorCount ? 'bad' : 'good'),
-        metric(`${a.stats.warningCount}`, 'warnings', a.stats.warningCount ? 'warn' : 'good'),
-        metric(`${Math.round(a.stats.reachableRatio * 100)}%`, 'step-free', a.stats.reachableRatio > 0.9 ? 'good' : 'warn'),
-        metric(`${a.stats.totalAreaM2}`, 'm² total'),
-      ),
-    ),
-
-    h(
-      'div',
-      { class: 'modes' },
-      ...(['design', 'furnish', 'review'] as Mode[]).map((m) =>
-        h(
-          'button',
-          {
-            class: `mode ${store.mode === m ? 'on' : ''}`,
-            'aria-pressed': store.mode === m ? 'true' : 'false',
-            title:
-              m === 'review'
-                ? 'Review mode unregisters every editing tool — the agent can look but not touch.'
-                : `Switch to ${m} mode`,
-            onclick: () => store.setMode(m),
-          },
-          m,
-        ),
-      ),
+      a.stats.errorCount + a.stats.warningCount === 0
+        ? h('span', { class: 'health-note good' }, 'all clear')
+        : h(
+            'span',
+            { class: 'health-note' },
+            a.stats.errorCount
+              ? h('span', { class: 'count bad' }, `${a.stats.errorCount} error${a.stats.errorCount === 1 ? '' : 's'}`)
+              : null,
+            a.stats.warningCount
+              ? h('span', { class: 'count warn' }, `${a.stats.warningCount} warning${a.stats.warningCount === 1 ? '' : 's'}`)
+              : null,
+          ),
     ),
 
     h(
@@ -243,29 +233,48 @@ function renderHeader(node: HTMLElement): void {
       h(
         'button',
         {
-          class: 'ghost',
+          class: 'ghost icon',
           disabled: !store.canUndo,
           onclick: () => store.undo(),
           title: 'Undo (Ctrl+Z)',
           'aria-label': 'Undo the last change',
         },
-        '↺',
+        '\u21ba',
       ),
       h(
         'button',
         {
-          class: 'ghost',
+          class: 'ghost icon',
           disabled: !store.canRedo,
           onclick: () => store.redo(),
-          title: 'Redo',
+          title: 'Redo (Ctrl+Shift+Z)',
           'aria-label': 'Redo',
         },
-        '↻',
+        '\u21bb',
       ),
       h(
         'button',
         {
-          class: 'ghost',
+          class: `agent-access ${readOnly ? 'locked' : ''}`,
+          'aria-pressed': readOnly ? 'true' : 'false',
+          title: readOnly
+            ? 'The agent can read the plan but every editing tool is unregistered. Click to let it edit again.'
+            : 'The agent can propose edits, and you approve each one. Click to make the plan read-only.',
+          onclick: () => store.setMode(readOnly ? 'design' : 'review'),
+        },
+        readOnly ? '\u{1f512} Read-only' : 'Agent can edit',
+      ),
+      h(
+        'div',
+        { class: `mcp-badge ${status}`, title: mcpTooltip() },
+        h('span', { class: 'dot' }),
+        badgeLabel,
+        h('span', { class: 'count' }, String(host.specs.length)),
+      ),
+      h(
+        'button',
+        {
+          class: 'ghost icon',
           title: 'How to drive this with an agent',
           'aria-label': 'How to drive this with an agent',
           onclick: () => {
@@ -274,13 +283,6 @@ function renderHeader(node: HTMLElement): void {
           },
         },
         '?',
-      ),
-      h(
-        'div',
-        { class: `mcp-badge ${status}`, title: mcpTooltip() },
-        h('span', { class: 'dot' }),
-        badgeLabel,
-        h('span', { class: 'count' }, `${host.toolNames.length} tools`),
       ),
     ),
   );
@@ -298,9 +300,6 @@ function scoreChip(score: number): HTMLElement {
   return h('div', { class: `score ${band}`, title: 'Overall plan health' }, h('strong', {}, String(score)), h('span', {}, '/100'));
 }
 
-function metric(value: string, label: string, tone = ''): HTMLElement {
-  return h('div', { class: `metric ${tone}` }, h('strong', {}, value), h('span', {}, label));
-}
 
 // ── Right rail ───────────────────────────────────────────────────────────────
 
@@ -657,19 +656,51 @@ function toolRunner(spec: ToolSpec): HTMLElement {
 
 // ── Bottom dock: overlays, palette, inspector ────────────────────────────────
 
+/**
+ * One row along the bottom. The two overlays that answer different questions
+ * are a single three-way choice rather than two checkboxes that can both be on,
+ * and everything occasional hides behind a menu.
+ */
 function renderDock(node: HTMLElement): void {
+  const overlayMode = store.overlays.heatmap ? 'clearance' : store.overlays.reach ? 'reach' : 'off';
+  const setOverlay = (value: 'reach' | 'clearance' | 'off') => {
+    store.overlays.reach = value === 'reach';
+    store.overlays.heatmap = value === 'clearance';
+    store.emit();
+  };
+
   fill(
     node,
     h(
       'div',
-      { class: 'overlays' },
-      toggle('reach', 'Step-free reach', 'Shade what can be reached from the front door with a 900 mm body.'),
-      toggle('heatmap', 'Clearance heatmap', 'Colour every square metre by how much clear space there is.'),
-      toggle('swings', 'Door swings'),
-      toggle('approach', 'Clear floor zones', 'The space each fitting needs in front of it to be usable.'),
-      toggle('dimensions', 'Dimensions'),
-      toggle('grid', 'Grid'),
+      { class: 'segmented', role: 'group', 'aria-label': 'Floor overlay' },
+      ...(
+        [
+          ['reach', 'Step-free reach', 'Shade what can be reached from the front door with a 900 mm body.'],
+          ['clearance', 'Clearance', 'Colour every square metre by how much clear space there is.'],
+          ['off', 'Plain', 'No overlay.'],
+        ] as const
+      ).map(([value, label, tip]) =>
+        h(
+          'button',
+          {
+            class: overlayMode === value ? 'on' : '',
+            'aria-pressed': overlayMode === value ? 'true' : 'false',
+            title: tip,
+            onclick: () => setOverlay(value),
+          },
+          label,
+        ),
+      ),
     ),
+
+    menu('View', [
+      checkItem('swings', 'Door swings'),
+      checkItem('approach', 'Clear floor zones'),
+      checkItem('dimensions', 'Dimensions'),
+      checkItem('grid', 'Grid'),
+    ]),
+
     store.overlays.heatmap
       ? h(
           'div',
@@ -682,50 +713,69 @@ function renderDock(node: HTMLElement): void {
           `${store.plan.settings.turningCircle} mm turning room`,
         )
       : null,
+
     h(
       'div',
       { class: 'dock-actions' },
-      h('button', { class: 'ghost small', onclick: () => canvas.fit() }, 'Fit'),
-      h('button', { class: 'ghost small', onclick: () => canvas.zoomBy(1.25) }, '+'),
-      h('button', { class: 'ghost small', onclick: () => canvas.zoomBy(1 / 1.25) }, '−'),
-      h(
-        'select',
-        {
-          class: 'ghost small',
-          'aria-label': 'Load a starter plan',
-          onchange: (e: Event) => {
-            const select = e.target as HTMLSelectElement;
-            const v = select.value;
-            select.value = '';
-            if (!v) return;
-            store.reset(v === 'shell' ? shellPlan() : v === 'accessible' ? accessiblePlan() : starterPlan());
-            requestAnimationFrame(() => canvas.fit());
-          },
-        },
-        h('option', { value: '' }, 'Load…'),
-        h('option', { value: 'apartment' }, 'Two-bed flat (has faults)'),
-        h('option', { value: 'accessible' }, 'Accessible bungalow (passes)'),
-        h('option', { value: 'shell' }, 'Empty shell'),
-      ),
-      h(
-        'select',
-        {
-          class: 'ghost small',
-          'aria-label': 'Export the plan',
-          onchange: (e: Event) => {
-            const select = e.target as HTMLSelectElement;
-            const v = select.value;
-            select.value = '';
-            void runExport(v);
-          },
-        },
-        h('option', { value: '' }, 'Export…'),
-        h('option', { value: 'svg' }, 'SVG drawing'),
-        h('option', { value: 'png' }, 'PNG of this view'),
-        h('option', { value: 'schedule' }, 'Room schedule (markdown)'),
-        h('option', { value: 'link' }, 'Copy share link'),
-      ),
+      menu('Open', [
+        menuButton('Two-bed flat (has faults)', () => loadSample(starterPlan())),
+        menuButton('Accessible bungalow (passes)', () => loadSample(accessiblePlan())),
+        menuButton('Empty shell', () => loadSample(shellPlan())),
+        menuButton('Blank page', () => {
+          store.newPlan('Untitled plan');
+          requestAnimationFrame(() => canvas.fit());
+        }),
+      ]),
+      menu('Export', [
+        menuButton('Copy share link', () => void runExport('link')),
+        menuButton('SVG drawing', () => void runExport('svg')),
+        menuButton('PNG of this view', () => void runExport('png')),
+        menuButton('Room schedule', () => void runExport('schedule')),
+      ]),
+      h('button', { class: 'ghost small', onclick: () => canvas.fit(), title: 'Fit the drawing (F)' }, 'Fit'),
+      h('button', { class: 'ghost small icon', onclick: () => canvas.zoomBy(1.25), 'aria-label': 'Zoom in' }, '+'),
+      h('button', { class: 'ghost small icon', onclick: () => canvas.zoomBy(1 / 1.25), 'aria-label': 'Zoom out' }, '\u2212'),
     ),
+  );
+}
+
+function loadSample(plan: Plan): void {
+  store.reset(plan);
+  requestAnimationFrame(() => canvas.fit());
+}
+
+/** A dropdown built on <details>, so it closes on Escape and works by keyboard. */
+function menu(label: string, items: Child[]): HTMLElement {
+  const box = h(
+    'details',
+    { class: 'menu' },
+    h('summary', {}, label, h('span', { class: 'caret' }, '\u25be')),
+    h('div', { class: 'menu-body' }, ...items),
+  );
+  box.addEventListener('click', (e) => {
+    // Close once something inside has been chosen.
+    if ((e.target as HTMLElement).closest('.menu-body button')) box.removeAttribute('open');
+  });
+  return box;
+}
+
+function menuButton(label: string, onClick: () => void): HTMLElement {
+  return h('button', { class: 'menu-item', onclick: onClick }, label);
+}
+
+function checkItem(key: keyof typeof store.overlays, label: string): HTMLElement {
+  return h(
+    'label',
+    { class: 'menu-item check' },
+    h('input', {
+      type: 'checkbox',
+      checked: store.overlays[key],
+      onchange: (e: Event) => {
+        store.overlays[key] = (e.target as HTMLInputElement).checked;
+        store.emit();
+      },
+    }),
+    label,
   );
 }
 
@@ -759,21 +809,6 @@ async function runExport(kind: string): Promise<void> {
   }
 }
 
-function toggle(key: keyof typeof store.overlays, label: string, title?: string): HTMLElement {
-  return h(
-    'label',
-    { class: `toggle ${store.overlays[key] ? 'on' : ''}`, title: title ?? label },
-    h('input', {
-      type: 'checkbox',
-      checked: store.overlays[key],
-      onchange: (e: Event) => {
-        store.overlays[key] = (e.target as HTMLInputElement).checked;
-        store.emit();
-      },
-    }),
-    label,
-  );
-}
 
 // ── Floating layer: inspector + approval ─────────────────────────────────────
 
@@ -983,46 +1018,75 @@ function paletteCard(): HTMLElement {
       h(
         'button',
         {
-          class: 'small',
+          class: 'primary',
           onclick: () => {
             paletteOpen = true;
             store.emit();
           },
         },
-        store.mode === 'furnish' ? '+ Add furniture' : '+ Add a room',
+        '+ Add',
       ),
-      h('span', { class: 'sub' }, 'Click anything on the plan to edit it.'),
+      h('span', { class: 'sub' }, 'or click anything on the plan to edit it'),
     );
   }
+
+  const showing = paletteTab === 'furniture' && rooms.length > 0 ? 'furniture' : 'rooms';
   return h(
     'div',
     { class: 'inspector palette' },
     h(
       'header',
       {},
-      h('h3', {}, store.mode === 'furnish' ? 'Add furniture' : 'Add a room'),
+      h(
+        'div',
+        { class: 'segmented small' },
+        h(
+          'button',
+          {
+            class: showing === 'rooms' ? 'on' : '',
+            onclick: () => {
+              paletteTab = 'rooms';
+              store.emit();
+            },
+          },
+          'Rooms',
+        ),
+        h(
+          'button',
+          {
+            class: showing === 'furniture' ? 'on' : '',
+            disabled: rooms.length === 0,
+            onclick: () => {
+              paletteTab = 'furniture';
+              store.emit();
+            },
+          },
+          'Furniture',
+        ),
+      ),
       h(
         'button',
         {
-          class: 'small',
+          class: 'ghost icon small',
+          'aria-label': 'Close',
           onclick: () => {
             paletteOpen = false;
             store.emit();
           },
         },
-        'Close',
+        '\u00d7',
       ),
     ),
-    store.mode === 'furnish'
+    showing === 'furniture'
       ? h(
           'div',
           { class: 'palette-grid' },
-          ...CATALOG.slice(0, 18).map((item) =>
+          ...CATALOG.map((item) =>
             h(
               'button',
               {
                 class: 'small',
-                title: `${item.w} × ${item.h} mm`,
+                title: `${item.w} \u00d7 ${item.h} mm`,
                 onclick: () => {
                   const target =
                     (store.selection && findRoom(store.plan, store.selection.id)) ??
@@ -1072,7 +1136,13 @@ function paletteCard(): HTMLElement {
             ),
           ),
         ),
-    h('p', { class: 'sub' }, 'Click anything on the plan to edit it. Drag to move, scroll to zoom, F to fit.'),
+    h(
+      'p',
+      { class: 'sub' },
+      showing === 'rooms'
+        ? 'New rooms attach to the east of the last one. Drag to move them.'
+        : 'Furniture is parked against a free wall, clear of doors.',
+    ),
   );
 }
 

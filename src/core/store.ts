@@ -14,7 +14,7 @@ import { starterPlan } from './samples';
 
 export type Actor = 'human' | 'agent' | 'system';
 
-export type Mode = 'design' | 'furnish' | 'review';
+export type Mode = 'design' | 'review';
 
 export interface ActivityEntry {
   id: string;
