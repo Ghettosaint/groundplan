@@ -45,6 +45,9 @@ export interface RoomStats {
   depthMm: number;
   /** Largest clear circle that fits, mm diameter. */
   turningCircleMm: number;
+  /** Centre of that circle — the most open spot, and where the label goes. */
+  openX: number;
+  openY: number;
   /** Fraction of the room reachable at the plan's mobility radius. */
   reachRatio: number;
   glazingM2: number;
@@ -511,6 +514,8 @@ function roomStats(plan: Plan, grid: Grid, reach: Reachability, room: Room): Roo
     widthMm: room.w,
     depthMm: room.h,
     turningCircleMm: Math.round(best.value * 2),
+    openX: Math.round(best.x),
+    openY: Math.round(best.y),
     reachRatio: round(roomReachRatio(grid, reach, room), 2),
     glazingM2: round(
       openings.filter((o) => o.kind === 'window').reduce((s, w) => s + windowAreaM2(w), 0),

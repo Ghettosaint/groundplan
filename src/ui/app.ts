@@ -549,6 +549,18 @@ function renderDock(node: HTMLElement): void {
       toggle('dimensions', 'Dimensions'),
       toggle('grid', 'Grid'),
     ),
+    store.overlays.heatmap
+      ? h(
+          'div',
+          { class: 'legend', title: 'Clear radius available at each square of floor' },
+          h('span', { class: 'swatch bad' }),
+          `under ${store.plan.settings.mobilityRadius * 2} mm`,
+          h('span', { class: 'swatch warn' }),
+          'tight',
+          h('span', { class: 'swatch good' }),
+          `${store.plan.settings.turningCircle} mm turning room`,
+        )
+      : null,
     h(
       'div',
       { class: 'dock-actions' },

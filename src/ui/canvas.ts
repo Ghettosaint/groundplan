@@ -344,15 +344,14 @@ export class PlanCanvas {
       const octx = off.getContext('2d')!;
       const img = octx.createImageData(g.cols, g.rows);
       const radius = store.plan.settings.mobilityRadius;
+      const turnRadius = store.plan.settings.turningCircle / 2;
       for (let i = 0; i < g.cols * g.rows; i++) {
         const p = i * 4;
         if (g.floor[i] !== 1 || g.blocked[i] === 1) continue;
         const clear = g.clearance[i]!;
         const reached = analysis.reach.mask[i] === 1;
         if (store.overlays.heatmap) {
-          // Red where a body will not fit, amber at the limit, green where it is roomy.
-          const t = Math.max(0, Math.min(1, clear / (radius * 2.4)));
-          const [r, gg, b] = ramp(t);
+          const [r, gg, b] = ramp(heatScale(clear, radius, turnRadius));
           img.data[p] = r;
           img.data[p + 1] = gg;
           img.data[p + 2] = b;
@@ -555,12 +554,18 @@ export class PlanCanvas {
     ctx.textAlign = 'center';
     for (const room of plan.rooms) {
       const stat = analysis.rooms.find((r) => r.id === room.id);
-      const cx = room.x + room.w / 2;
-      const cy = room.y + room.h / 2;
-      ctx.fillStyle = INK;
+      // Sit the label in the emptiest part of the room rather than dead centre,
+      // so it never lands on top of a bed.
+      const title = room.name.toUpperCase();
       ctx.font = `600 ${220}px ui-sans-serif, system-ui, sans-serif`;
+      const half = ctx.measureText(title).width / 2 + 120;
+      // Keep the whole label inside its own room even when the open spot is
+      // right up against a wall.
+      const cx = clampTo(stat ? stat.openX : room.x + room.w / 2, room.x + half, room.x + room.w - half);
+      const cy = clampTo(stat ? stat.openY : room.y + room.h / 2, room.y + 320, room.y + room.h - 300);
+      ctx.fillStyle = INK;
       ctx.textBaseline = 'bottom';
-      ctx.fillText(room.name.toUpperCase(), cx, cy - 40);
+      ctx.fillText(title, cx, cy - 40);
       ctx.fillStyle = MUTED;
       ctx.font = `${190}px ui-sans-serif, system-ui, sans-serif`;
       ctx.textBaseline = 'top';
@@ -668,6 +673,12 @@ export class PlanCanvas {
 
 // ── Small helpers ────────────────────────────────────────────────────────────
 
+/** Keeps a value inside a range, tolerating an inverted range gracefully. */
+function clampTo(v: number, lo: number, hi: number): number {
+  if (hi < lo) return (lo + hi) / 2;
+  return Math.max(lo, Math.min(hi, v));
+}
+
 function grow(r: Rect, amount: number): Rect {
   return { x: r.x - amount, y: r.y - amount, w: r.w + amount * 2, h: r.h + amount * 2 };
 }
@@ -725,11 +736,22 @@ function swingArc(
   return { hinge, radius: op.width, from: closed, to: open, anticlockwise: open < closed };
 }
 
+/**
+ * Maps a clear radius onto the ramp against the two thresholds that mean
+ * something: the body radius (below it, nobody fits) and the turning radius
+ * (above it, there is room to turn round).
+ */
+function heatScale(clear: number, bodyRadius: number, turnRadius: number): number {
+  if (clear <= bodyRadius) return 0.35 * (clear / bodyRadius);
+  if (clear <= turnRadius) return 0.35 + (0.35 * (clear - bodyRadius)) / (turnRadius - bodyRadius);
+  return Math.min(1, 0.7 + (0.3 * (clear - turnRadius)) / turnRadius);
+}
+
 /** Red → amber → green ramp for the clearance heatmap. */
 function ramp(t: number): [number, number, number] {
   const stops: [number, [number, number, number]][] = [
     [0, [198, 60, 48]],
-    [0.42, [214, 148, 38]],
+    [0.35, [214, 148, 38]],
     [0.7, [122, 168, 74]],
     [1, [46, 138, 106]],
   ];

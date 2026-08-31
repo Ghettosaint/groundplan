@@ -363,10 +363,13 @@ code { font-family: var(--mono); font-size: 0.86em; }
 .approval-actions button { flex: 1; }
 
 @media (max-width: 1080px) {
-  .stage { grid-template-columns: 1fr; grid-template-rows: 1fr 300px; }
+  .stage { grid-template-columns: 1fr; grid-template-rows: minmax(220px, 1fr) minmax(180px, 42vh); }
+  .rail { border-left: none; border-top: 1px solid var(--line); }
   .approval { right: 16px; bottom: 16px; width: min(380px, calc(100vw - 32px)); }
-  .inspector { display: none; }
+  /* The floating cards would sit on top of the rail once it moves underneath. */
+  .inspector, .inspector.palette, .inspector.palette.collapsed { display: none; }
   .metrics { display: none; }
+  .brand-sub { display: none; }
 }
 
 /* ── First-run help ──────────────────────────────────────────────────────── */
@@ -396,3 +399,13 @@ code { font-family: var(--mono); font-size: 0.86em; }
   display: flex; align-items: center; gap: 10px; width: auto; max-width: 340px;
 }
 .inspector.palette header { justify-content: space-between; }
+
+.legend {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11.5px; color: var(--text-faint);
+  padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px;
+}
+.legend .swatch { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+.legend .swatch.bad { background: #c63c30; }
+.legend .swatch.warn { background: #d69426; }
+.legend .swatch.good { background: #2e8a6a; }
