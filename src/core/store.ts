@@ -9,6 +9,7 @@
 
 import { analyse, type Analysis } from './rules';
 import type { Journey } from './route';
+import { loadUnderlay, saveUnderlay, type Underlay } from './underlay';
 import { DEFAULT_SETTINGS, type Plan, type Selection } from './types';
 import { starterPlan } from './samples';
 
@@ -90,6 +91,11 @@ class Store {
   proposal: Proposal | null = null;
   highlight: Highlight | null = null;
   playback: JourneyPlayback | null = null;
+  /**
+   * A picture to trace over. Kept outside the Plan on purpose — plans travel in
+   * share links and exports, and a photograph would make both unusable.
+   */
+  underlay: Underlay | null = loadUnderlay();
   /** When true, every mutating tool call has to be approved in the page first. */
   requireApproval = true;
   /** Set while an agent tool is running, so the canvas can show presence. */
@@ -231,6 +237,12 @@ class Store {
         this.emit();
       }
     }, ms + 30);
+  }
+
+  setUnderlay(next: Underlay | null): void {
+    this.underlay = next;
+    saveUnderlay(next);
+    this.emit();
   }
 
   /** Starts a route animation, replacing whatever was playing. */

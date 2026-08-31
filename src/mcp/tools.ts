@@ -36,6 +36,7 @@ import {
   setOpeningWidth,
 } from '../core/ops';
 import { describeJourney, planJourney } from '../core/route';
+import { rescale } from '../core/underlay';
 import { analyse } from '../core/rules';
 import { accessiblePlan, shellPlan, starterPlan } from '../core/samples';
 import { shareLink } from '../core/share';
@@ -268,7 +269,25 @@ function readTools(): ToolSpec[] {
       inputSchema: obj({}),
       execute: () => {
         note('get_plan', 'Read the full plan.');
-        return reply({ ok: true, summary: `${store.plan.name}: ${store.plan.rooms.length} rooms.`, plan: planForAgent(store.plan) });
+        const under = store.underlay;
+        return reply({
+          ok: true,
+          summary: `${store.plan.name}: ${store.plan.rooms.length} rooms.`,
+          plan: planForAgent(store.plan),
+          // When someone is tracing a photograph of their home, the agent should
+          // know it is there and where it sits, so "trace this" has coordinates.
+          tracing_image: under
+            ? {
+                label: under.label,
+                x_mm: under.x,
+                y_mm: under.y,
+                width_mm: under.width,
+                height_mm: under.height,
+                locked: under.locked,
+                note: 'A reference picture the user is drawing over. Rooms you add should line up with it.',
+              }
+            : null,
+        });
       },
     },
 
@@ -1015,6 +1034,61 @@ function viewTools(): ToolSpec[] {
           distance_m: Math.round(journey.distanceMm / 100) / 10,
           rooms_passed: journey.rooms,
           stops_at: journey.pinch,
+        });
+      },
+    },
+
+    {
+      name: 'edit_underlay',
+      description:
+        'Adjust the reference picture the user is tracing over: set how wide it really is, nudge it into position, fade it, or lock it so the mouse goes back to the drawing. Use it when someone says the traced image is the wrong size or out of line. It does not change the plan itself.',
+      annotations: { title: 'Adjust the tracing image', readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+      inputSchema: obj({
+        real_width_m: { type: 'number', description: 'How wide the picture is in the real world, metres.' },
+        dx_mm: { type: 'number', description: 'Nudge east, mm.' },
+        dy_mm: { type: 'number', description: 'Nudge south, mm.' },
+        opacity: { type: 'number', description: 'Between 0.1 and 1.' },
+        locked: { type: 'boolean', description: 'True to fix it in place so the drawing takes the mouse.' },
+      }),
+      execute: (args) => {
+        const under = store.underlay;
+        if (!under) {
+          return replyError('There is no tracing image loaded.', {
+            hint: 'The person can add one with "Trace an image" in the bottom bar, or by dropping a picture onto the page.',
+          });
+        }
+        let next = { ...under };
+        const changed: string[] = [];
+        const width = num(args.real_width_m);
+        if (width !== undefined && width > 0.5) {
+          next = rescale(next, Math.round(width * 1000));
+          changed.push(`width ${width} m`);
+        }
+        if (args.dx_mm !== undefined || args.dy_mm !== undefined) {
+          next.x += Math.round(num(args.dx_mm, 0)!);
+          next.y += Math.round(num(args.dy_mm, 0)!);
+          changed.push('position');
+        }
+        const opacity = num(args.opacity);
+        if (opacity !== undefined) {
+          next.opacity = Math.max(0.1, Math.min(1, opacity));
+          changed.push(`fade ${Math.round(next.opacity * 100)}%`);
+        }
+        if (typeof args.locked === 'boolean') {
+          next.locked = args.locked;
+          changed.push(args.locked ? 'locked' : 'unlocked');
+        }
+        if (changed.length === 0) {
+          return replyError('Nothing to change.', {
+            hint: 'Pass real_width_m, dx_mm/dy_mm, opacity or locked.',
+          });
+        }
+        store.setUnderlay(next);
+        note('edit_underlay', changed.join(', '));
+        return reply({
+          ok: true,
+          summary: `Tracing image updated: ${changed.join(', ')}.`,
+          image: { x_mm: next.x, y_mm: next.y, width_mm: next.width, height_mm: next.height, locked: next.locked },
         });
       },
     },

@@ -65,8 +65,8 @@ This could not be an MCP server sitting behind an API, and it is worth being pre
 
 | State | Registered tools |
 |---|---|
-| Normal editing | 26 |
-| Something selected on the canvas | 27 — an `edit_selection` tool appears, scoped to that entity |
+| Normal editing | 26, or 27 while a tracing image is loaded |
+| Something selected on the canvas | one more — an `edit_selection` tool appears, scoped to that entity |
 | Findings outstanding | `fix_violation` appears, with the live rule ids as its enum |
 | **Review mode** | 12 — every mutating tool is unregistered; the agent can look but not touch |
 | **A proposal awaiting approval** | 14 — writes withdrawn, `check_proposal` added, so edits cannot queue up behind a decision the user has not made |
@@ -115,9 +115,17 @@ That drawing is not a hand-made sample. `npm run docs:render` produces it by rep
 
 Getting there meant fixing the automatic furniture placer, which used to cheerfully park a wardrobe across a doorway and a fridge facing a worktop. It now rules out anything the checker would object to — doorways, door swings, other people's clear floor — and among what is left, picks the position with the most space around it.
 
+## Tracing a real home
+
+Most people meet a floor plan as a picture: an estate agent's listing, a photo of a drawing on a wall, a screenshot of a survey.
+
+Drop that picture anywhere on the page — or paste it — say how wide the place really is, and it sits under the drawing at scale. Unlocked, the image takes the mouse so you can position it; **Lock in place** hands the mouse back and you trace over it. The agent is told the image is there and where it sits, so *"trace this"* has coordinates to work in, and `edit_underlay` lets it help you line the thing up.
+
+The picture is deliberately not part of the plan. Plans travel in share links and SVG exports, and a photograph would make both unusable, so the image lives beside the plan in local storage.
+
 ## The tool surface
 
-25 base tools plus contextual ones. All lengths are millimetres; every reference resolves by id, exact name, partial name or room type, so `"bathroom"`, `"Bathroom"` and `r3` all work.
+26 base tools plus contextual ones. All lengths are millimetres; every reference resolves by id, exact name, partial name or room type, so `"bathroom"`, `"Bathroom"` and `r3` all work.
 
 ### Reading
 
@@ -146,6 +154,7 @@ Getting there meant fixing the automatic furniture placer, which used to cheerfu
 | `highlight` | The agent points at things and they pulse on the canvas. Talking about a plan without pointing at it is hard |
 | `set_view` | Turns the clearance heatmap and reach overlay on and off, so the agent can *show* what it measured rather than describing it |
 | `show_route` | Plays the journey described above. Returns the route width, the rooms passed and where it stopped, so the agent can narrate what the user is watching |
+| `edit_underlay` | Scales, nudges, fades or locks the picture the user is tracing over |
 
 ### Contextual
 
@@ -276,6 +285,7 @@ src/
     catalog.ts    Furniture with real dimensions and clear-floor requirements
     samples.ts    Starter plans — one flawed on purpose, one that passes everything
     route.ts      Journeys: the widest path turned into a trip that can be watched
+    underlay.ts   Tracing images: reading, scaling, and keeping them out of the plan
     svg.ts        Vector export and the markdown room schedule
     share.ts      Plans compressed into a URL fragment
     store.ts      State, undo history, the shared activity feed

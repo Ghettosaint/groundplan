@@ -476,3 +476,23 @@ button.small.icon { padding: 4px 8px; }
 }
 
 .panel-note.warn-note { color: #f0c078; border-bottom-color: #4d3a15; }
+
+/* ── Tracing an image ────────────────────────────────────────────────────── */
+
+.menu-note {
+  padding: 6px 10px 4px; font-size: 11px; color: var(--text-faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.menu-item.field-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; }
+.menu-item.field-row input[type='number'] { width: 76px; }
+.menu-item.field-row input[type='range'] { width: 120px; accent-color: var(--accent); }
+.menu-item.field-row .unit { color: var(--text-faint); font-size: 11px; }
+
+#app.dropping .sheet-host::after {
+  content: 'Drop an image to trace it';
+  position: absolute; inset: 12px; z-index: 5;
+  display: grid; place-items: center;
+  border: 2px dashed var(--accent); border-radius: 14px;
+  background: rgba(63, 160, 122, 0.12); color: #cdeee0;
+  font-size: 15px; pointer-events: none;
+}

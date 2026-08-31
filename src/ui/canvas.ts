@@ -53,8 +53,11 @@ export class PlanCanvas {
     | { kind: 'furniture'; id: string; ox: number; oy: number; moved: boolean }
     | { kind: 'room'; id: string; ox: number; oy: number; moved: boolean }
     | { kind: 'opening'; id: string; start: number; grab: number; moved: boolean }
+    | { kind: 'underlay'; ox: number; oy: number; moved: boolean }
     | null = null;
   private hover: string | null = null;
+  /** Decoded tracing image, cached by its data URL. */
+  private underlayImage: { src: string; el: HTMLImageElement; ready: boolean } | null = null;
   /** Cleared by fit(); set the moment the user pans or zooms by hand. */
   private userAdjusted = false;
 
@@ -263,6 +266,14 @@ export class PlanCanvas {
       return;
     }
 
+    // An unlocked tracing image takes the drag: unlocked means "I am placing
+    // this", and locking it hands the mouse back to the drawing.
+    const under = store.underlay;
+    if (under && !under.locked && pointInRect(wx, wy, { x: under.x, y: under.y, w: under.width, h: under.height })) {
+      this.drag = { kind: 'underlay', ox: wx - under.x, oy: wy - under.y, moved: false };
+      return;
+    }
+
     const hit = this.hitTest(wx, wy);
     if (!hit) {
       store.select(null);
@@ -310,6 +321,15 @@ export class PlanCanvas {
     // Live drags mutate the working plan directly and only land in history on
     // pointer-up, so a drag is one undo step rather than a hundred.
     const drag = this.drag;
+    if (drag.kind === 'underlay') {
+      const under = store.underlay;
+      if (!under) return;
+      under.x = Math.round((wx - drag.ox) / 10) * 10;
+      under.y = Math.round((wy - drag.oy) / 10) * 10;
+      drag.moved = true;
+      store.emit();
+      return;
+    }
     if (drag.kind === 'furniture') {
       const item = store.plan.furniture.find((x) => x.id === drag.id);
       if (!item) return;
@@ -349,6 +369,10 @@ export class PlanCanvas {
     this.el.releasePointerCapture(e.pointerId);
     const drag = this.drag;
     this.drag = null;
+    if (drag?.kind === 'underlay') {
+      if (drag.moved) store.setUnderlay(store.underlay);
+      return;
+    }
     if (!drag || drag.kind === 'pan' || !drag.moved) return;
 
     // Re-apply the same end state through commit() so it becomes one undoable,
@@ -402,6 +426,7 @@ export class PlanCanvas {
 
     if (store.overlays.grid) this.drawGrid(w, h);
     this.drawRoomFills(plan);
+    this.drawUnderlay();
     if (store.overlays.heatmap || store.overlays.reach) this.drawRaster(analysis);
     if (store.overlays.approach) this.drawApproach(plan);
     this.drawWalls(plan);
@@ -439,6 +464,44 @@ export class PlanCanvas {
       ctx.moveTo(x0, y);
       ctx.lineTo(x1, y);
       ctx.stroke();
+    }
+  }
+
+  /**
+   * The tracing image, over the room colours so it stays legible, and under the
+   * walls and labels so the drawing always wins.
+   */
+  private drawUnderlay(): void {
+    const under = store.underlay;
+    if (!under) return;
+    if (this.underlayImage?.src !== under.src) {
+      const el = new Image();
+      const entry = { src: under.src, el, ready: false };
+      el.onload = () => {
+        entry.ready = true;
+        this.draw();
+      };
+      el.src = under.src;
+      this.underlayImage = entry;
+    }
+    const cached = this.underlayImage;
+    if (!cached?.ready) return;
+
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.globalAlpha = under.opacity;
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(cached.el, under.x, under.y, under.width, under.height);
+    ctx.restore();
+
+    if (!under.locked) {
+      // Unlocked means "I am positioning this", so say so on the drawing.
+      ctx.save();
+      ctx.strokeStyle = '#1a63d8';
+      ctx.setLineDash([200, 140]);
+      ctx.lineWidth = 40;
+      ctx.strokeRect(under.x, under.y, under.width, under.height);
+      ctx.restore();
     }
   }
 

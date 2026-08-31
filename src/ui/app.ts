@@ -8,7 +8,7 @@
 
 import { CATALOG, ROOM_TYPES, ROOM_TYPE_KEYS } from '../core/catalog';
 import { applyFix } from '../core/fixes';
-import { areaM2, roomRect } from '../core/geometry';
+import { areaM2, planBounds, roomRect } from '../core/geometry';
 import {
   addFurniture,
   addRoom,
@@ -27,6 +27,13 @@ import {
 } from '../core/ops';
 import { accessiblePlan, shellPlan, starterPlan } from '../core/samples';
 import { describeJourney, planJourney } from '../core/route';
+import {
+  ACCEPTED,
+  placeUnderlay,
+  readImage,
+  rescale,
+  type LoadedImage,
+} from '../core/underlay';
 import { download, shareLink, slug } from '../core/share';
 import { planToSchedule, planToSvg } from '../core/svg';
 import { store } from '../core/store';
@@ -110,6 +117,7 @@ export function mountApp(root: HTMLElement): PlanCanvas {
   host.onStatus(() => render());
   render();
   bindKeys();
+  bindImageIntake(root);
   return canvas;
 }
 
@@ -701,6 +709,8 @@ function renderDock(node: HTMLElement): void {
       checkItem('grid', 'Grid'),
     ]),
 
+    tracingControl(),
+
     store.overlays.heatmap
       ? h(
           'div',
@@ -737,6 +747,137 @@ function renderDock(node: HTMLElement): void {
       h('button', { class: 'ghost small icon', onclick: () => canvas.zoomBy(1 / 1.25), 'aria-label': 'Zoom out' }, '\u2212'),
     ),
   );
+}
+
+/**
+ * Tracing an image of a real home.
+ *
+ * Unlocked, the picture takes the mouse so it can be positioned; locked, the
+ * mouse goes back to the drawing and you trace over it. That one switch is the
+ * whole interaction.
+ */
+function tracingControl(): HTMLElement {
+  const under = store.underlay;
+  if (!under) {
+    return h(
+      'button',
+      {
+        class: 'ghost small',
+        title: 'Put a photo or screenshot of a floor plan under the drawing and trace it. You can also drop or paste an image straight onto the page.',
+        onclick: () => void pickImage(),
+      },
+      'Trace an image',
+    );
+  }
+
+  return menu(under.locked ? 'Tracing' : 'Tracing · placing', [
+    h('div', { class: 'menu-note' }, under.label),
+    h(
+      'label',
+      { class: 'menu-item field-row' },
+      h('span', {}, 'Real width'),
+      h('input', {
+        type: 'number',
+        step: '0.1',
+        min: '0.5',
+        value: (under.width / 1000).toFixed(1),
+        'aria-label': 'Real width of the image, in metres',
+        onchange: (e: Event) => {
+          const metres = Number((e.target as HTMLInputElement).value);
+          if (!Number.isFinite(metres) || metres <= 0) return;
+          store.setUnderlay(rescale(under, metres * 1000));
+        },
+      }),
+      h('span', { class: 'unit' }, 'm'),
+    ),
+    h(
+      'label',
+      { class: 'menu-item field-row' },
+      h('span', {}, 'Fade'),
+      h('input', {
+        type: 'range',
+        min: '10',
+        max: '100',
+        value: String(Math.round(under.opacity * 100)),
+        'aria-label': 'Image opacity',
+        oninput: (e: Event) => {
+          store.underlay = { ...under, opacity: Number((e.target as HTMLInputElement).value) / 100 };
+          store.emit();
+        },
+        onchange: () => store.setUnderlay(store.underlay),
+      }),
+    ),
+    menuButton(under.locked ? 'Unlock to reposition' : 'Lock in place, and trace', () =>
+      store.setUnderlay({ ...under, locked: !under.locked }),
+    ),
+    menuButton('Replace image…', () => void pickImage()),
+    menuButton('Remove', () => store.setUnderlay(null)),
+  ]);
+}
+
+let picker: HTMLInputElement | null = null;
+
+async function pickImage(): Promise<void> {
+  if (!picker) {
+    picker = h('input', { type: 'file', accept: ACCEPTED, class: 'sr-only' });
+    picker.addEventListener('change', () => {
+      const file = picker?.files?.[0];
+      if (file) void acceptImage(file);
+      if (picker) picker.value = '';
+    });
+    document.body.appendChild(picker);
+  }
+  picker.click();
+}
+
+/**
+ * Places a new tracing image roughly over whatever is already drawn, at a
+ * plausible scale, and leaves it unlocked so the next thing you do is put it
+ * where it belongs.
+ */
+async function acceptImage(file: File): Promise<void> {
+  let image: LoadedImage;
+  try {
+    image = await readImage(file);
+  } catch (err) {
+    window.alert(err instanceof Error ? err.message : String(err));
+    return;
+  }
+  const bounds = planBounds(store.plan);
+  const width = store.plan.rooms.length > 0 ? bounds.w : 9000;
+  const centre = { x: bounds.x + bounds.w / 2, y: bounds.y + bounds.h / 2 };
+  store.setUnderlay(placeUnderlay(image, width, centre));
+  store.note('Added a tracing image', 'human', `${image.label} — set its real width, then lock it.`);
+  requestAnimationFrame(() => canvas.fit());
+}
+
+/** Dropping or pasting a picture anywhere on the page traces it. */
+function bindImageIntake(root: HTMLElement): void {
+  const stop = (e: Event) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  root.addEventListener('dragover', (e) => {
+    if (e.dataTransfer?.types.includes('Files')) {
+      stop(e);
+      e.dataTransfer.dropEffect = 'copy';
+      root.classList.add('dropping');
+    }
+  });
+  root.addEventListener('dragleave', () => root.classList.remove('dropping'));
+  root.addEventListener('drop', (e) => {
+    const file = [...(e.dataTransfer?.files ?? [])].find((f) => f.type.startsWith('image/'));
+    root.classList.remove('dropping');
+    if (!file) return;
+    stop(e);
+    void acceptImage(file);
+  });
+  window.addEventListener('paste', (e) => {
+    const target = e.target as HTMLElement | null;
+    if (target && /input|textarea/i.test(target.tagName)) return;
+    const file = [...(e.clipboardData?.files ?? [])].find((f) => f.type.startsWith('image/'));
+    if (file) void acceptImage(file);
+  });
 }
 
 function loadSample(plan: Plan): void {
@@ -1221,6 +1362,12 @@ function helpCard(): HTMLElement | null {
         h('li', {}, 'Ask the agent something real: ', h('em', {}, '“check this flat for wheelchair access and fix whatever fails.”')),
         h('li', {}, 'Watch the ', h('strong', {}, 'Findings'), ' panel and the coloured overlays. The agent is reading exactly the numbers you can see.'),
         h('li', {}, 'Approve or discard each change. Anything it did can be reverted from ', h('strong', {}, 'Activity'), '.'),
+      ),
+      h(
+        'p',
+        {},
+        h('strong', {}, 'Looking at a real flat?'),
+        ' Drop a photo or screenshot of its floor plan anywhere on this page — or paste it — tell it how wide the place really is, lock it down, and trace over it.',
       ),
       h(
         'p',
