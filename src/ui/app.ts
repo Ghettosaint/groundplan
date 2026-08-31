@@ -26,6 +26,7 @@ import {
   setRoomType,
 } from '../core/ops';
 import { accessiblePlan, shellPlan, starterPlan } from '../core/samples';
+import { describeJourney, planJourney } from '../core/route';
 import { download, shareLink, slug } from '../core/share';
 import { planToSchedule, planToSvg } from '../core/svg';
 import { store, type Mode } from '../core/store';
@@ -408,6 +409,27 @@ function issueCard(v: Violation): HTMLElement {
     h(
       'div',
       { class: 'issue-actions' },
+      v.rule.startsWith('access.') || v.rule === 'plan.circulation'
+        ? h(
+            'button',
+            {
+              class: 'small primary',
+              title: 'Watch it happen on the drawing',
+              onclick: (e: Event) => {
+                e.stopPropagation();
+                const room =
+                  v.entities.map((id) => findRoom(store.plan, id)).find(Boolean) ??
+                  store.analysis.rooms
+                    .filter((r) => r.routeWidthMm > 0)
+                    .sort((a, b) => a.routeWidthMm - b.routeWidthMm)
+                    .map((r) => findRoom(store.plan, r.id))
+                    .find(Boolean);
+                if (room) playRoute(room.id);
+              },
+            },
+            'Show me',
+          )
+        : null,
       h(
         'button',
         {
@@ -827,13 +849,22 @@ function inspectorCard(): HTMLElement | null {
         h(
           'button',
           {
+            class: 'small primary',
+            title: 'Watch a 900 mm body travel from the front door to this room',
+            onclick: () => playRoute(room.id),
+          },
+          'Walk the route',
+        ),
+        h(
+          'button',
+          {
             class: 'small',
             onclick: () =>
               store.commit(`Deleted ${room.name}`, 'human', (d) => {
                 deleteRoom(d, room.id);
               }),
           },
-          'Delete room',
+          'Delete',
         ),
       ),
     );
@@ -1031,6 +1062,22 @@ function paletteCard(): HTMLElement {
         ),
     h('p', { class: 'sub' }, 'Click anything on the plan to edit it. Drag to move, scroll to zoom, F to fit.'),
   );
+}
+
+/**
+ * Walks a body from the front door to a room and plays it back on the drawing.
+ * The same call the `show_route` tool makes.
+ */
+function playRoute(roomId: string, diameterMm?: number): void {
+  const plan = store.plan;
+  const diameter = diameterMm ?? plan.settings.mobilityRadius * 2;
+  const journey = planJourney(plan, store.analysis.grid, roomId, diameter / 2);
+  if (!journey) {
+    store.note('No route to walk', 'human', 'Nothing connects the entrance to that room.');
+    return;
+  }
+  store.play(journey);
+  store.note('Walked the route', 'human', describeJourney(journey, diameter));
 }
 
 function truncate(text: string, max: number): string {

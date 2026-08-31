@@ -65,19 +65,34 @@ This could not be an MCP server sitting behind an API, and it is worth being pre
 
 | State | Registered tools |
 |---|---|
-| Normal editing | 24 |
-| Something selected on the canvas | 25 — an `edit_selection` tool appears, scoped to that entity |
+| Normal editing | 25 |
+| Something selected on the canvas | 26 — an `edit_selection` tool appears, scoped to that entity |
 | Findings outstanding | `fix_violation` appears, with the live rule ids as its enum |
-| **Review mode** | 10 — every mutating tool is unregistered; the agent can look but not touch |
-| **A proposal awaiting approval** | 12 — writes withdrawn, `check_proposal` added, so edits cannot queue up behind a decision the user has not made |
+| **Review mode** | 11 — every mutating tool is unregistered; the agent can look but not touch |
+| **A proposal awaiting approval** | 13 — writes withdrawn, `check_proposal` added, so edits cannot queue up behind a decision the user has not made |
 
 That last row has one deliberate exception, and it is the subtlest thing in the codebase: the tool whose call is *currently blocked on the approval* stays registered. Unregistering a tool aborts its running invocation, so withdrawing it would kill the very call waiting for the user's answer. `ToolHost.sync` takes a `keepAlive` list for exactly this.
 
 **Both parties share one history.** Mouse drags, keyboard nudges and tool calls all go through the same `commit()`. The Activity panel shows who did what, and every agent edit has a **revert** button beside it.
 
+## Watch it happen
+
+The most useful thing the app does is not a number.
+
+`show_route` sends a body of a stated width from the front door towards a room, along the widest route the home allows, **at full scale on the drawing**. It sweeps the corridor behind it. When it stops fitting, it stops — dead, in the doorway, turning red, with the measurement labelled on the spot: *800 mm — needs 900 mm*.
+
+Run it twice on the same flat and the point makes itself:
+
+| Body | Result |
+|---|---|
+| 900 mm wheelchair → Bathroom | Stops at the door. `800 mm — needs 900 mm` |
+| 700 mm walking frame → Bathroom | Goes straight through, green |
+
+Same door. Same drawing. The difference is 100 mm, and until you see a disc the size of a wheelchair fail to fit through it, it is just a number in a table.
+
 ## The tool surface
 
-23 base tools plus contextual ones. All lengths are millimetres; every reference resolves by id, exact name, partial name or room type, so `"bathroom"`, `"Bathroom"` and `r3` all work.
+24 base tools plus contextual ones. All lengths are millimetres; every reference resolves by id, exact name, partial name or room type, so `"bathroom"`, `"Bathroom"` and `r3` all work.
 
 ### Reading
 
@@ -104,6 +119,7 @@ That last row has one deliberate exception, and it is the subtlest thing in the 
 |---|---|
 | `highlight` | The agent points at things and they pulse on the canvas. Talking about a plan without pointing at it is hard |
 | `set_view` | Turns the clearance heatmap and reach overlay on and off, so the agent can *show* what it measured rather than describing it |
+| `show_route` | Plays the journey described above. Returns the route width, the rooms passed and where it stopped, so the agent can narrate what the user is watching |
 
 ### Contextual
 
@@ -133,7 +149,9 @@ Three decisions did most of the work:
 4. **Dilate the result by the same radius** to get the floor that body actually *sweeps* — what a person means by "how much of my home can I get to".
 5. **Widest-path search** — Dijkstra with `min` in place of `+` and a max-heap — gives, for every square of floor, the widest body that could ever reach it, and the path it took. Walking that path back finds the pinch point, and matching the pinch against the openings names the door responsible.
 
-Step 5 is what makes the tool results actionable rather than merely correct. Toggle **Clearance heatmap** to see step 2 and **Step-free reach** to see steps 3–4.
+Step 5 is what makes the tool results actionable rather than merely correct — and it is what `show_route` animates. Among routes of equal width the search prefers the shorter one, so the path a body takes looks like a path a person would take.
+
+Toggle **Clearance heatmap** to see step 2 and **Step-free reach** to see steps 3–4.
 
 ## The rules
 
@@ -188,7 +206,7 @@ npm install && npm run dev
 Then open <http://localhost:5173>.
 
 ```bash
-npm test          # 50 unit tests over the geometry, grid, rules, ops and exports
+npm test          # 130 tests: geometry, occupancy, routing, rules, tools, exports, fuzzing
 npm run build     # type-check and bundle to dist/ — a static site, no backend
 npm run docs:render   # regenerate the drawings in docs/
 ```
@@ -203,6 +221,8 @@ npm run docs:render   # regenerate the drawings in docs/
 Things worth asking for:
 
 > Check this flat for wheelchair access and fix whatever fails.
+
+> Show me why I can't get to the bathroom. Then try it with a walking frame instead.
 
 > Which door is stopping me getting to the bathroom, and how much wider does it need to be?
 
@@ -227,6 +247,7 @@ src/
     ops.ts        The only functions that mutate a plan; shared by mouse, keyboard and tools
     catalog.ts    Furniture with real dimensions and clear-floor requirements
     samples.ts    Starter plans — one flawed on purpose, one that passes everything
+    route.ts      Journeys: the widest path turned into a trip that can be watched
     svg.ts        Vector export and the markdown room schedule
     share.ts      Plans compressed into a URL fragment
     store.ts      State, undo history, the shared activity feed
@@ -238,7 +259,13 @@ src/
   ui/
     canvas.ts     The drawing sheet, direct manipulation, keyboard control, ghost previews
     app.ts        Header, findings, activity, tool inspector, approval card, exports
-tests/            50 tests over geometry, occupancy, routing, rules, batching and exports
+tests/            130 tests. Beyond the unit tests, tools.test.ts drives every
+                  tool the way an agent would — valid arguments, nonsense
+                  arguments, and the consent gate — and robustness.test.ts throws
+                  sixty randomly generated plans plus a set of deliberately
+                  degenerate ones at the engine to check it never crashes, never
+                  produces a NaN, and never points a finding at something that
+                  does not exist
 ```
 
 No framework, no backend, no telemetry. TypeScript in strict mode, built with Vite.

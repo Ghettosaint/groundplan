@@ -35,6 +35,7 @@ import {
   roomNames,
   setOpeningWidth,
 } from '../core/ops';
+import { describeJourney, planJourney } from '../core/route';
 import { analyse } from '../core/rules';
 import { accessiblePlan, shellPlan, starterPlan } from '../core/samples';
 import { shareLink } from '../core/share';
@@ -897,6 +898,53 @@ function viewTools(): ToolSpec[] {
         store.flash(ids, s(args.label) || undefined, 5000);
         note('highlight', `Pointed at ${refs.join(', ')}.`);
         return reply({ ok: true, summary: `Highlighted ${ids.length} item(s) on screen for the user.` });
+      },
+    },
+
+    {
+      name: 'show_route',
+      description:
+        'Play the journey from the front door into a room on the drawing. A body of the given width travels the widest route the home allows and stops, at full scale, exactly where it stops fitting — with the measurement labelled on the spot. Use this whenever someone asks why a room is unreachable, or wants to see whether a wider wheelchair would still get through: showing them beats quoting a number at them.',
+      annotations: { title: 'Show the route', readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+      inputSchema: obj(
+        {
+          to_room: ROOM_REF,
+          body_diameter_mm: {
+            type: 'number',
+            description:
+              'Width of the body making the trip, mm. Defaults to the plan setting (900 mm). 700 mm is a walking frame; 1000 mm is a large powered chair.',
+          },
+        },
+        ['to_room'],
+      ),
+      execute: (args) => {
+        const plan = store.plan;
+        const room = findRoom(plan, s(args.to_room));
+        if (!room) {
+          return replyError(`No room called "${s(args.to_room)}".`, {
+            hint: `Rooms in this plan: ${roomNames(plan)}.`,
+          });
+        }
+        const diameter = Math.round(num(args.body_diameter_mm, plan.settings.mobilityRadius * 2)!);
+        const journey = planJourney(plan, analyse(plan).grid, room.id, diameter / 2);
+        if (!journey) {
+          return replyError(`Nothing connects the entrance to "${room.name}" at all.`, {
+            hint: 'Check there is a front door, and that the room has a door onto the rest of the plan.',
+          });
+        }
+        store.play(journey);
+        note('show_route', describeJourney(journey, diameter));
+        return reply({
+          ok: true,
+          summary: describeJourney(journey, diameter),
+          playing_on_screen: true,
+          reaches: journey.arrives,
+          tested_diameter_mm: diameter,
+          route_width_mm: journey.widthMm,
+          distance_m: Math.round(journey.distanceMm / 100) / 10,
+          rooms_passed: journey.rooms,
+          stops_at: journey.pinch,
+        });
       },
     },
 

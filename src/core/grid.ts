@@ -425,14 +425,27 @@ export interface RouteField {
   width: Float32Array;
   /** Predecessor cell on the widest path, or -1. */
   prev: Int32Array;
+  /** Cells travelled to get there, used to break ties between equal routes. */
+  steps: Float32Array;
   seed: number;
 }
+
+/**
+ * Among routes of equal width we want the shorter one — otherwise the path
+ * wanders about the middle of every room looking for elbow room it does not
+ * need. Folding the step count into the heap key as a tiny penalty orders the
+ * queue lexicographically: width first, distance second.
+ */
+const STEP_PENALTY = 1e-6;
 
 export function widestPaths(g: Grid, seed: number): RouteField {
   const n = g.cols * g.rows;
   const width = new Float32Array(n);
   const prev = new Int32Array(n).fill(-1);
-  if (seed < 0 || seed >= n || g.clearance[seed]! <= 0) return { width, prev, seed: -1 };
+  const steps = new Float32Array(n).fill(Infinity);
+  if (seed < 0 || seed >= n || g.clearance[seed]! <= 0) {
+    return { width, prev, steps, seed: -1 };
+  }
 
   // Lazy-deletion binary max-heap over (key, cell).
   const keys: number[] = [];
@@ -474,11 +487,12 @@ export function widestPaths(g: Grid, seed: number): RouteField {
   };
 
   width[seed] = g.clearance[seed]!;
+  steps[seed] = 0;
   push(width[seed]!, seed);
 
   while (keys.length > 0) {
     const [key, u] = pop();
-    if (key < width[u]!) continue; // stale entry
+    if (key < width[u]! - steps[u]! * STEP_PENALTY - 1e-9) continue; // stale entry
     const ux = u % g.cols;
     const uy = (u - ux) / g.cols;
     for (let k = 0; k < 4; k++) {
@@ -489,14 +503,18 @@ export function widestPaths(g: Grid, seed: number): RouteField {
       const clear = g.clearance[v]!;
       if (clear <= 0) continue;
       const through = Math.min(width[u]!, clear);
-      if (through > width[v]!) {
+      const walked = steps[u]! + 1;
+      const wider = through > width[v]! + 1e-9;
+      const sameButShorter = Math.abs(through - width[v]!) <= 1e-9 && walked < steps[v]!;
+      if (wider || sameButShorter) {
         width[v] = through;
+        steps[v] = walked;
         prev[v] = u;
-        push(through, v);
+        push(through - walked * STEP_PENALTY, v);
       }
     }
   }
-  return { width, prev, seed };
+  return { width, prev, steps, seed };
 }
 
 export interface RouteResult {

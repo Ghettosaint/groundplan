@@ -20,6 +20,7 @@ import {
   roomRect,
   wallRuns,
 } from '../core/geometry';
+import { positionAt } from '../core/route';
 import type { Analysis } from '../core/rules';
 import { store } from '../core/store';
 import type { Furniture, Opening, Plan, Rect } from '../core/types';
@@ -410,6 +411,7 @@ export class PlanCanvas {
     this.drawLabels(plan, analysis);
     if (store.overlays.dimensions) this.drawDimensions(plan);
     this.drawIssueMarkers(analysis);
+    this.drawJourney();
     this.drawProposal(plan);
     this.drawSelection(plan);
     this.drawHighlight(plan);
@@ -789,6 +791,135 @@ export class PlanCanvas {
     const furAfter = new Set(next.furniture.map((f) => f.id));
     for (const f of plan.furniture) if (!furAfter.has(f.id)) ghost(furnitureRect(f), true);
 
+    ctx.restore();
+  }
+
+  /**
+   * Plays a route back at full scale: a body of the tested width sets off from
+   * the front door, sweeps the corridor behind it, and stops dead at the point
+   * where it stops fitting. The disc is drawn at its real diameter, so a 900 mm
+   * body against an 800 mm doorway is not an argument — it is a picture.
+   */
+  private drawJourney(): void {
+    const playback = store.playback;
+    if (!playback) return;
+    const { journey, startedAt, travelMs, holdMs } = playback;
+    if (journey.points.length < 2) return;
+
+    const ctx = this.ctx;
+    const elapsed = Date.now() - startedAt;
+    if (elapsed > travelMs + holdMs) return;
+
+    const still = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    const progress = still ? 1 : Math.min(1, elapsed / travelMs);
+    const eased = 1 - (1 - progress) ** 2;
+    const limit = journey.travelled[journey.stopIndex] ?? 0;
+    const here = positionAt(journey, eased * limit);
+    const blocked = !journey.arrives;
+
+    ctx.save();
+
+    // The corridor the body sweeps, drawn at its true width.
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(154, 108, 240, 0.16)';
+    ctx.lineWidth = journey.radius * 2;
+    ctx.beginPath();
+    ctx.moveTo(journey.points[0]!.x, journey.points[0]!.y);
+    for (let i = 1; i <= here.index; i++) ctx.lineTo(journey.points[i]!.x, journey.points[i]!.y);
+    ctx.lineTo(here.x, here.y);
+    ctx.stroke();
+
+    // Centre line: solid where it has been, dashed ahead of it.
+    ctx.strokeStyle = 'rgba(122, 78, 210, 0.85)';
+    ctx.lineWidth = 40;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(journey.points[0]!.x, journey.points[0]!.y);
+    for (let i = 1; i <= here.index; i++) ctx.lineTo(journey.points[i]!.x, journey.points[i]!.y);
+    ctx.lineTo(here.x, here.y);
+    ctx.stroke();
+
+    ctx.strokeStyle = blocked ? 'rgba(200, 55, 47, 0.55)' : 'rgba(122, 78, 210, 0.3)';
+    ctx.setLineDash([160, 130]);
+    ctx.lineWidth = 34;
+    ctx.beginPath();
+    ctx.moveTo(here.x, here.y);
+    for (let i = here.index + 1; i < journey.points.length; i++) {
+      ctx.lineTo(journey.points[i]!.x, journey.points[i]!.y);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // The body itself: violet on the way, red where it stops, green when it
+    // gets there. The state of the trip should be readable at a glance.
+    const arrived = progress >= 1;
+    const pulse = still ? 0 : (Math.sin(Date.now() / 180) + 1) / 2;
+    const stalled = arrived && blocked;
+    const madeIt = arrived && !blocked;
+    ctx.fillStyle = stalled
+      ? `rgba(200, 55, 47, ${0.18 + pulse * 0.18})`
+      : madeIt
+        ? 'rgba(46, 138, 106, 0.22)'
+        : 'rgba(154, 108, 240, 0.22)';
+    ctx.strokeStyle = stalled ? '#c8372f' : madeIt ? '#2e8a6a' : '#7a4ed2';
+    ctx.lineWidth = stalled ? 60 + pulse * 30 : 55;
+    ctx.beginPath();
+    ctx.arc(here.x, here.y, journey.radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Cross-hairs, so the disc reads as a measurement rather than a blob.
+    ctx.lineWidth = 26;
+    ctx.strokeStyle = stalled
+      ? 'rgba(200,55,47,0.7)'
+      : madeIt
+        ? 'rgba(46,138,106,0.7)'
+        : 'rgba(122,78,210,0.6)';
+    ctx.beginPath();
+    ctx.moveTo(here.x - journey.radius, here.y);
+    ctx.lineTo(here.x + journey.radius, here.y);
+    ctx.moveTo(here.x, here.y - journey.radius);
+    ctx.lineTo(here.x, here.y + journey.radius);
+    ctx.stroke();
+
+    if (stalled && journey.pinch) {
+      this.callout(journey.pinch, `${journey.widthMm} mm — needs ${journey.radius * 2} mm`, '#c8372f');
+    } else if (madeIt) {
+      this.callout(
+        { x: here.x, y: here.y },
+        `${journey.radius * 2} mm gets through — ${journey.widthMm} mm at the tightest point`,
+        '#2e8a6a',
+      );
+    }
+
+    ctx.restore();
+    if (!still) requestAnimationFrame(() => this.draw());
+  }
+
+  /** A measurement label pinned to a point on the drawing. */
+  private callout(at: { x: number; y: number }, text: string, colour: string): void {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.font = `700 ${230}px ui-sans-serif, system-ui, sans-serif`;
+    const width = ctx.measureText(text).width + 320;
+    const bx = at.x - width / 2;
+    const by = at.y - 1500;
+
+    ctx.fillStyle = colour;
+    roundRect(ctx, { x: bx, y: by, w: width, h: 460 }, 120);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(at.x - 130, by + 455);
+    ctx.lineTo(at.x + 130, by + 455);
+    ctx.lineTo(at.x, by + 720);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, at.x, by + 245);
     ctx.restore();
   }
 

@@ -8,6 +8,7 @@
  */
 
 import { analyse, type Analysis } from './rules';
+import type { Journey } from './route';
 import { DEFAULT_SETTINGS, type Plan, type Selection } from './types';
 import { starterPlan } from './samples';
 
@@ -55,6 +56,16 @@ export interface Highlight {
   label?: string;
 }
 
+/** A route being played back on the drawing. */
+export interface JourneyPlayback {
+  journey: Journey;
+  startedAt: number;
+  /** How long the body takes to walk the route, ms. */
+  travelMs: number;
+  /** How long the result stays on screen once it arrives or stops, ms. */
+  holdMs: number;
+}
+
 let seq = 0;
 export function uid(prefix: string): string {
   seq += 1;
@@ -78,6 +89,7 @@ class Store {
   activity: ActivityEntry[] = [];
   proposal: Proposal | null = null;
   highlight: Highlight | null = null;
+  playback: JourneyPlayback | null = null;
   /** When true, every mutating tool call has to be approved in the page first. */
   requireApproval = true;
   /** Set while an agent tool is running, so the canvas can show presence. */
@@ -219,6 +231,19 @@ class Store {
         this.emit();
       }
     }, ms + 30);
+  }
+
+  /** Starts a route animation, replacing whatever was playing. */
+  play(journey: Journey, travelMs = 2400, holdMs = 5500): void {
+    this.playback = { journey, startedAt: Date.now(), travelMs, holdMs };
+    this.emit();
+    const total = travelMs + holdMs;
+    setTimeout(() => {
+      if (this.playback && Date.now() - this.playback.startedAt >= total - 20) {
+        this.playback = null;
+        this.emit();
+      }
+    }, total + 40);
   }
 
   note(label: string, actor: Actor, detail?: string, tool?: string): void {
