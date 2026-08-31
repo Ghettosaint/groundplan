@@ -65,11 +65,11 @@ This could not be an MCP server sitting behind an API, and it is worth being pre
 
 | State | Registered tools |
 |---|---|
-| Normal editing | 26, or 27 while a tracing image is loaded |
-| Something selected on the canvas | one more — an `edit_selection` tool appears, scoped to that entity |
+| Normal editing | 28 |
+| Something selected on the canvas | 29 — an `edit_selection` tool appears, scoped to that entity |
 | Findings outstanding | `fix_violation` appears, with the live rule ids as its enum |
-| **Review mode** | 12 — every mutating tool is unregistered; the agent can look but not touch |
-| **A proposal awaiting approval** | 14 — writes withdrawn, `check_proposal` added, so edits cannot queue up behind a decision the user has not made |
+| **Read-only** | 14 — every mutating tool is unregistered; the agent can look but not touch |
+| **A proposal awaiting approval** | 16 — writes withdrawn, `check_proposal` added, so edits cannot queue up behind a decision the user has not made |
 
 That last row has one deliberate exception, and it is the subtlest thing in the codebase: the tool whose call is *currently blocked on the approval* stays registered. Unregistering a tool aborts its running invocation, so withdrawing it would kill the very call waiting for the user's answer. `ToolHost.sync` takes a `keepAlive` list for exactly this.
 
@@ -125,7 +125,7 @@ The picture is deliberately not part of the plan. Plans travel in share links an
 
 ## The tool surface
 
-26 base tools plus contextual ones. All lengths are millimetres; every reference resolves by id, exact name, partial name or room type, so `"bathroom"`, `"Bathroom"` and `r3` all work.
+27 base tools plus contextual ones. All lengths are millimetres; every reference resolves by id, exact name, partial name or room type, so `"bathroom"`, `"Bathroom"` and `r3` all work.
 
 ### Reading
 
@@ -139,11 +139,12 @@ The picture is deliberately not part of the plan. Plans travel in share links an
 | `list_catalog` | Real furniture dimensions and the clear floor each item needs in front of it |
 | `get_selection` | What the user has selected right now, so "this room" and "that door" resolve |
 | `get_activity` | The shared edit history, attributed |
+| `get_capabilities` | What the app models, how to work with it, and what it cannot do — with a reason and an alternative for each limit |
 | `export_plan` | A share link carrying the whole drawing in its URL, a markdown room schedule, or the plan as SVG |
 
 ### Writing
 
-`add_room` · `edit_room` · `add_opening` · `edit_opening` · `add_furniture` · `edit_furniture` · `furnish_room` · `delete_entity` · `clear_room` · `set_standards` · `undo_last` · `load_sample`
+`add_room` · `edit_room` · `add_opening` · `edit_opening` · `add_furniture` · `edit_furniture` · `furnish_room` · `delete_entity` · `clear_room` · `edit_plan` · `undo` · `load_sample`
 
 …and **`apply_batch`**, which runs a whole sequence against one draft under a single approval. It is genuinely atomic: if step four is rejected, steps one to three never happened, and the agent is told which step failed and why. Designing a room is one decision for the user, not eleven.
 
@@ -152,7 +153,7 @@ The picture is deliberately not part of the plan. Plans travel in share links an
 | Tool | Why it exists |
 |---|---|
 | `highlight` | The agent points at things and they pulse on the canvas. Talking about a plan without pointing at it is hard |
-| `set_view` | Turns the clearance heatmap and reach overlay on and off, so the agent can *show* what it measured rather than describing it |
+| `set_view` | Overlays, fitting the drawing, and selecting what the user would have clicked — so the agent can *show* what it measured rather than describing it |
 | `show_route` | Plays the journey described above. Returns the route width, the rooms passed and where it stopped, so the agent can narrate what the user is watching |
 | `edit_underlay` | Scales, nudges, fades or locks the picture the user is tracing over |
 
@@ -163,6 +164,30 @@ The picture is deliberately not part of the plan. Plans travel in share links an
 | `fix_violation` | Anything is failing. Applies the canonical repair — widen the door that is actually pinching the route, add the window, re-park whatever is eating the turning circle |
 | `edit_selection` | The user has something selected |
 | `check_proposal` | A change is waiting for approval |
+
+### Nothing the interface can do is out of reach
+
+Every control on the page has a tool behind it: renaming the drawing, changing the standards and the wall thicknesses (`edit_plan`), undo and redo several steps at a time (`undo`), selecting what the user would have clicked and fitting the view (`set_view`), opening a sample or a blank page (`load_sample`), scaling and locking the tracing image (`edit_underlay`).
+
+Three things deliberately have **no** tool: turning off the approval gate, leaving read-only mode, and loading a file. The first two are the person's controls over the agent, and an agent that could switch off its own supervision would not be supervised. The third is a browser capability a tool does not have. `get_capabilities` says all of this in as many words, so an asked agent can explain rather than flail.
+
+### When the answer is no
+
+The Model Context host does not validate arguments against the schema it was given — `execute` receives whatever the model sent. Before this was noticed, an agent asked for an L-shaped room would write `{ shape: "L" }`, get a plain rectangle, and report success. **Silently doing nearly the right thing is the worst possible answer.**
+
+So every tool checks its own arguments first, and a refusal names the limit:
+
+```
+add_room does not accept "shape", so that part of the request was not carried out.
+
+Rooms in Groundplan are rectangles. An L-shaped or irregular space is drawn as two
+or more rooms that meet edge to edge, with a wide archway between them — add_opening
+with kind "archway" and a width of 1400 mm or more reads as one continuous space.
+```
+
+The same happens for a second storey, a ceiling height, a wall colour, a build cost, a 3D render, a compass bearing, and a length written as `"three metres"` instead of `3000`. Each says what cannot be modelled, why, and the nearest thing that works. Batched steps get the identical treatment, quoting the step number, and nothing is applied.
+
+And `get_capabilities` lets an agent ask *before* it tries — the model, the workflow, and eight limits with a reason and an alternative for each.
 
 ### How the tools are written
 
@@ -206,7 +231,7 @@ Toggle **Clearance heatmap** to see step 2 and **Step-free reach** to see steps 
 | `room.overlap` | Rooms meet edge to edge, never intersect |
 | `kitchen.work_triangle` | Sink–hob–fridge triangle within 3.6–6.6 m (advisory) |
 
-Thresholds follow widely used residential guidance — ADA/ANSI A117.1 and ISO 21542 for clearances, typical habitable-room minimums elsewhere. They are adjustable at runtime via `set_standards`, because a plan checked for a walking frame is a different plan from one checked for a wheelchair. **Groundplan is a design aid, not a code compliance certificate.**
+Thresholds follow widely used residential guidance — ADA/ANSI A117.1 and ISO 21542 for clearances, typical habitable-room minimums elsewhere. They are adjustable at runtime via `edit_plan`, because a plan checked for a walking frame is a different plan from one checked for a wheelchair. **Groundplan is a design aid, not a code compliance certificate.**
 
 ## Getting things out
 
@@ -241,7 +266,7 @@ npm install && npm run dev
 Then open <http://localhost:5173>.
 
 ```bash
-npm test          # 138 tests: geometry, occupancy, routing, rules, tools, exports, fuzzing
+npm test          # 187 tests: geometry, occupancy, routing, rules, tools, exports, fuzzing
 npm run build     # type-check and bundle to dist/ — a static site, no backend
 npm run docs:render   # regenerate the drawings in docs/
 ```
@@ -293,11 +318,15 @@ src/
     runtime.ts    Host detection (native → polyfill) and the register/unregister diff
     operations.ts Arguments to mutations — one dispatcher for single tools and batches
     tools.ts      The tool surface
+    validate.ts   Argument checking, and the explanations behind every refusal
     gate.ts       The consent gate: proposals, change descriptions, issue deltas
   ui/
     canvas.ts     The drawing sheet, direct manipulation, keyboard control, ghost previews
     app.ts        Header, findings, activity, tool inspector, approval card, exports
-tests/            138 tests. Beyond the unit tests, tools.test.ts drives every
+tests/            187 tests. Beyond the unit tests, unscripted.test.ts asks for
+                  things the app cannot do — L-shapes, storeys, ceiling heights,
+                  3D — and checks each is refused with a reason rather than
+                  half-done; tools.test.ts drives every
                   tool the way an agent would — valid arguments, nonsense
                   arguments, and the consent gate — and robustness.test.ts throws
                   sixty randomly generated plans plus a set of deliberately

@@ -54,6 +54,7 @@ import {
   type Runner,
 } from './operations';
 import { host, reply, replyError, type ToolContent, type ToolSpec } from './runtime';
+import { listProperties, validateArgs, type ToolSchema } from './validate';
 
 // ── Shared schema fragments ──────────────────────────────────────────────────
 
@@ -261,6 +262,87 @@ function issuesForAgent(plan: Plan, severity?: string, rule?: string) {
 
 function readTools(): ToolSpec[] {
   return [
+    {
+      name: 'get_capabilities',
+      description:
+        'What this page can and cannot do, in one call. Read it before attempting anything unusual, and read it when a request does not obviously map onto a tool — it lists the limits explicitly, so you can tell someone plainly that a thing is not possible here and offer the nearest thing that is, instead of guessing.',
+      annotations: { title: 'What can I do here?', readOnlyHint: true },
+      inputSchema: obj({}),
+      execute: () => {
+        const registered = buildTools();
+        note('get_capabilities', 'Read what the app can do.');
+        return reply({
+          ok: true,
+          summary:
+            'Groundplan is a single-storey floor plan editor with an accessibility rule engine. You can read and measure the drawing, and propose changes that the person approves. Lengths are millimetres; x grows east and y grows south.',
+          the_model: {
+            rooms: 'Axis-aligned rectangles that meet edge to edge. Walls are derived from where rooms touch, not drawn separately.',
+            openings: 'Doors, archways and windows cut into a room wall, given a side and an offset along it.',
+            furniture: 'Rectangles from a fixed catalogue, rotated in quarter turns, each with the clear floor it needs in front.',
+            settings: 'The body diameter, turning circle and clear doorway the plan is checked against — all adjustable with edit_plan.',
+          },
+          how_to_work: [
+            'Start with get_plan, then check_plan. Findings carry the measured value, the required value and a fix.',
+            'Prefer apply_batch for anything that takes more than one step: it is one approval for the person and it is atomic.',
+            'After a change, read issues.resolved and issues.introduced in the result rather than calling check_plan again.',
+            'Use show_route when someone asks why somewhere is unreachable — showing beats quoting a number.',
+            'Every mutating call may stop at a consent dialog. If the result says approved: false, nothing happened; ask what they would prefer.',
+          ],
+          cannot_do: [
+            {
+              asked_for: 'L-shaped, curved or angled rooms',
+              why: 'Rooms are axis-aligned rectangles.',
+              instead: 'Draw the space as two or more rectangles that touch, joined by an archway 1400 mm or wider — it reads and measures as one room.',
+            },
+            {
+              asked_for: 'More than one storey, or stairs',
+              why: 'Groundplan models one floor at a time and has no stair geometry.',
+              instead: 'Check each storey as its own plan.',
+            },
+            {
+              asked_for: 'A 3D view or a walkthrough',
+              why: 'There is no 3D renderer; the app deliberately works in plan.',
+              instead: 'show_route sends a body of a stated width along the real route at full scale and stops it where it stops fitting.',
+            },
+            {
+              asked_for: 'Loading a photo or a PDF of a plan',
+              why: 'A tool cannot read files; only the person can add one, by dropping or pasting an image onto the page.',
+              instead: 'Ask them to drop the picture in. get_plan then reports it, and edit_underlay scales and positions it so you can trace over it.',
+            },
+            {
+              asked_for: 'Ceiling heights, elevations, sections, finishes or costs',
+              why: 'Only the plan is modelled. The one vertical dimension is a window sill and head.',
+              instead: 'export_plan with format "schedule" gives areas and clearances, which is what an estimate would be built from.',
+            },
+            {
+              asked_for: 'Turning off the approval gate, or leaving read-only mode',
+              why: 'Those are the person’s controls over you, so no tool exposes them.',
+              instead: 'Ask them to change it in the page. get_selection reports the current setting.',
+            },
+            {
+              asked_for: 'Saving to a server, emailing, or printing',
+              why: 'There is no backend and no account; nothing leaves the browser.',
+              instead: 'export_plan with format "link" gives a URL that carries the whole drawing, which they can send to anyone.',
+            },
+            {
+              asked_for: 'Compass orientation, sunlight or views',
+              why: 'The plan has no true north and no sun model. n/e/s/w are directions on the drawing.',
+              instead: 'The daylight rule measures glazing area against floor area, which is what check_plan reports.',
+            },
+          ],
+          right_now: {
+            plan: store.plan.name,
+            rooms: store.plan.rooms.length,
+            editing_allowed: store.mode !== 'review',
+            approval_required: store.requireApproval,
+            tracing_image_loaded: store.underlay !== null,
+            tools_available: registered.map((t) => t.name),
+          },
+          note: 'Arguments are checked before anything runs. If you pass something this app does not model, the call is refused and the refusal says why — nothing is silently ignored.',
+        });
+      },
+    },
+
     {
       name: 'get_plan',
       description:
@@ -837,18 +919,21 @@ function writeTools(): ToolSpec[] {
     },
 
     {
-      name: 'set_standards',
+      name: 'edit_plan',
       description:
-        'Change the accessibility standards the plan is measured against — the body diameter used for circulation, the turning circle, the minimum clear doorway. Raise them to design for a wheelchair user; lower them to check an existing home against a walking frame.',
-      annotations: { title: 'Set standards', readOnlyHint: false, destructiveHint: false },
+        'Rename the drawing, or change the standards it is measured against — the body diameter used for circulation, the turning circle, the minimum clear doorway, and how thick the walls are. Raise the standards to design for a wheelchair user; lower them to check an existing home against a walking frame.',
+      annotations: { title: 'Rename or re-standardise the plan', readOnlyHint: false, destructiveHint: false },
       inputSchema: obj({
-        mobility_diameter_mm: { type: 'number', description: 'Body width used for circulation. 900 mm is the wheelchair default.' },
+        name: { type: 'string', description: 'What to call this drawing.' },
+        mobility_diameter_mm: { type: 'number', description: 'Body width used for circulation. 900 mm is the wheelchair default; 700 mm is a walking frame.' },
         turning_circle_mm: { type: 'number', description: 'Clear circle required in key rooms. 1500 mm is standard.' },
         min_clear_door_mm: { type: 'number', description: 'Minimum clear doorway. 815 mm is the usual figure.' },
+        interior_wall_mm: { type: 'number', description: 'Thickness of internal partitions. 100 mm by default.' },
+        exterior_wall_mm: { type: 'number', description: 'Thickness of the outside envelope. 250 mm by default.' },
       }),
       execute: (args) =>
-        mutate('set_standards', RUNNERS.set_standards!(args), {
-          title: 'Change the standards this plan is checked against',
+        mutate('edit_plan', RUNNERS.edit_plan!(args), {
+          title: s(args.name) ? `Rename the plan to "${s(args.name)}"` : 'Change the standards this plan is checked against',
         }),
     },
 
@@ -902,7 +987,11 @@ function writeTools(): ToolSpec[] {
         return mutate(
           'apply_batch',
           (draft) => {
-            const result = runBatch(draft, steps);
+            const schemas = new Map(buildTools().map((t) => [t.name, t.inputSchema as ToolSchema]));
+            const result = runBatch(draft, steps, (op, opArgs) => {
+              const schema = schemas.get(op);
+              return schema ? validateArgs(op, schema, opArgs) : null;
+            });
             if (!result.ok) return { ok: false, error: result.error, hint: result.hint };
             return {
               ok: true,
@@ -916,36 +1005,71 @@ function writeTools(): ToolSpec[] {
     },
 
     {
-      name: 'undo_last',
-      description: 'Undo the most recent change, whoever made it. Use this when the person says an edit was wrong.',
-      annotations: { title: 'Undo', readOnlyHint: false, destructiveHint: false },
-      inputSchema: obj({}),
-      execute: () => {
-        if (!store.canUndo) return replyError('There is nothing left to undo.');
-        store.undo();
-        note('undo_last', 'Rolled back one step.');
+      name: 'undo',
+      description:
+        'Step the drawing backwards or forwards through its history, whoever made the changes. Use it when the person says an edit was wrong, or asks you to put something back. The history is shared, so this undoes their edits as readily as your own — say what you are about to roll back before you do it.',
+      annotations: { title: 'Undo or redo', readOnlyHint: false, destructiveHint: false },
+      inputSchema: obj({
+        steps: { type: 'number', description: 'How many changes to step through. Default 1.' },
+        direction: { type: 'string', enum: ['undo', 'redo'], description: 'Default undo.' },
+      }),
+      execute: (args) => {
+        const direction = s(args.direction) === 'redo' ? 'redo' : 'undo';
+        const wanted = Math.max(1, Math.min(50, Math.round(num(args.steps, 1)!)));
+        let done = 0;
+        while (done < wanted && (direction === 'undo' ? store.undo() : store.redo())) done += 1;
+        if (done === 0) {
+          return replyError(
+            direction === 'undo' ? 'There is nothing left to undo.' : 'There is nothing to redo.',
+            { hint: 'Call get_activity to see what has happened so far.' },
+          );
+        }
+        note('undo', `${direction} ${done} step(s).`);
         const a = analyse(store.plan);
-        return reply({ ok: true, summary: 'Undid the last change.', remaining_errors: a.stats.errorCount });
+        return reply({
+          ok: true,
+          summary: `Stepped ${direction === 'undo' ? 'back' : 'forward'} ${done} change${done === 1 ? '' : 's'}${
+            done < wanted ? `, which was as far as the history goes` : ''
+          }.`,
+          steps_taken: done,
+          remaining_errors: a.stats.errorCount,
+          plan_score: a.stats.score,
+        });
       },
     },
 
     {
       name: 'load_sample',
       description:
-        'Replace the whole drawing with a starter plan: "apartment" for a furnished two-bedroom flat with real problems in it, "accessible" for a bungalow that passes every rule (a worked example to copy from), or "shell" for an empty 48 m² box to design from scratch. Asks for confirmation because it discards the current plan.',
+        'Replace the whole drawing: "apartment" is a furnished two-bedroom flat with real problems in it, "accessible" a bungalow that passes every rule (a worked example to copy from), "shell" an empty 48 m² box, and "blank" a completely empty page to design a home from nothing. Asks for confirmation because it discards the current plan.',
       annotations: { title: 'Load a starter plan', readOnlyHint: false, destructiveHint: true },
-      inputSchema: obj({ which: { type: 'string', enum: ['apartment', 'accessible', 'shell'] } }, ['which']),
+      inputSchema: obj(
+        {
+          which: { type: 'string', enum: ['apartment', 'accessible', 'shell', 'blank'] },
+          name: { type: 'string', description: 'What to call the new drawing. Blank pages default to "Untitled plan".' },
+        },
+        ['which'],
+      ),
       execute: (args) =>
         mutate(
           'load_sample',
           (draft) => {
             const which = s(args.which);
+            if (which === 'blank') {
+              draft.name = s(args.name) || 'Untitled plan';
+              draft.rooms = [];
+              draft.openings = [];
+              draft.furniture = [];
+              store.requestFit();
+              return { ok: true, value: null, message: `Started a blank page called "${draft.name}".` };
+            }
             const next = which === 'shell' ? shellPlan() : which === 'accessible' ? accessiblePlan() : starterPlan();
-            draft.name = next.name;
+            draft.name = s(args.name) || next.name;
             draft.rooms = next.rooms;
             draft.openings = next.openings;
             draft.furniture = next.furniture;
             draft.settings = next.settings;
+            store.requestFit();
             return { ok: true, value: null, message: `Loaded the "${s(args.which)}" starter plan.` };
           },
           { destructive: true, title: `Load the ${s(args.which)} starter plan` },
@@ -1104,20 +1228,63 @@ function viewTools(): ToolSpec[] {
         swings: { type: 'boolean', description: 'Draw door swing arcs.' },
         approach: { type: 'boolean', description: 'Draw the clear floor each fitting needs.' },
         dimensions: { type: 'boolean', description: 'Show room dimensions.' },
+        grid: { type: 'boolean', description: 'Show the metric grid.' },
+        fit: { type: 'boolean', description: 'Zoom the drawing so the whole plan is visible.' },
+        select: {
+          type: 'string',
+          description:
+            'Select a room, opening or item of furniture, as the person would by clicking it. Pass an empty string to deselect.',
+        },
       }),
       execute: (args) => {
         const changed: string[] = [];
-        for (const key of ['heatmap', 'reach', 'swings', 'approach', 'dimensions'] as const) {
+        for (const key of ['heatmap', 'reach', 'swings', 'approach', 'dimensions', 'grid'] as const) {
           if (typeof args[key] === 'boolean') {
             store.overlays[key] = args[key] as boolean;
             changed.push(`${key}=${args[key]}`);
           }
         }
-        if (changed.length === 0)
-          return replyError('Nothing to change.', { hint: 'Pass one or more of heatmap, reach, swings, approach, dimensions.' });
+        if (args.select !== undefined) {
+          const ref = s(args.select);
+          if (!ref) {
+            store.select(null);
+            changed.push('selection cleared');
+          } else {
+            const room = findRoom(store.plan, ref);
+            const item = room ? null : findFurniture(store.plan, ref);
+            const opening = room || item ? null : findOpening(store.plan, ref);
+            if (!room && !item && !opening) {
+              return replyError(`Nothing on the plan matches "${ref}".`, {
+                hint: `Rooms in this plan: ${roomNames(store.plan)}. Furniture and openings can be given by label or id from get_plan.`,
+              });
+            }
+            store.select(
+              room
+                ? { kind: 'room', id: room.id }
+                : item
+                  ? { kind: 'furniture', id: item.id }
+                  : { kind: 'opening', id: opening!.id },
+            );
+            changed.push(`selected ${room?.name ?? item?.label ?? opening?.kind}`);
+          }
+        }
+        if (args.fit === true) {
+          store.requestFit();
+          changed.push('fitted the drawing');
+        }
+        if (changed.length === 0) {
+          return replyError('Nothing to change.', {
+            hint: 'Pass one or more of heatmap, reach, swings, approach, dimensions, grid, fit or select.',
+          });
+        }
         store.emit();
         note('set_view', changed.join(', '));
-        return reply({ ok: true, summary: `View updated: ${changed.join(', ')}.`, overlays: store.overlays });
+        return reply({
+          ok: true,
+          summary: `View updated: ${changed.join(', ')}.`,
+          overlays: store.overlays,
+          selection: store.selection,
+        });
       },
     },
 
@@ -1265,6 +1432,29 @@ function contextualTools(): ToolSpec[] {
  * proposal is on screen, so an agent physically cannot queue up edits behind a
  * decision the user has not made yet.
  */
+/**
+ * Wraps a tool so its arguments are checked before anything runs.
+ *
+ * The Model Context host passes whatever the model sent straight through, so
+ * without this an agent that asks for an L-shaped room gets a rectangle and no
+ * hint that half its request evaporated. Silently doing nearly the right thing
+ * is worse than refusing.
+ */
+function guarded(spec: ToolSpec): ToolSpec {
+  return {
+    ...spec,
+    execute: (args) => {
+      const problem = validateArgs(spec.name, spec.inputSchema as ToolSchema, args);
+      if (!problem) return spec.execute(args);
+      store.note(spec.name, 'agent', `Refused: ${problem.error}`, spec.name);
+      return replyError(problem.error, {
+        hint: problem.hint,
+        accepted_arguments: listProperties(spec.inputSchema as ToolSchema),
+      });
+    },
+  };
+}
+
 export function buildTools(): ToolSpec[] {
   const tools = [...readTools(), ...viewTools()];
   if (store.mode !== 'review') {
@@ -1279,7 +1469,7 @@ export function buildTools(): ToolSpec[] {
     }
   }
   tools.push(...contextualTools());
-  return tools;
+  return tools.map(guarded);
 }
 
 /** Tools that must survive a re-sync because a call is in flight through them. */
@@ -1296,7 +1486,7 @@ let lastNames = '';
  * Cosmetic changes — a description that now lists different rule ids — are
  * coalesced, because they arrive on every mouse-move during a drag. A change to
  * *which* tools exist is applied at once: an agent that has just had a proposal
- * approved should not be told for another quarter of a second that `undo_last`
+ * approved should not be told for another quarter of a second that `undo`
  * does not exist, and a debounce that keeps being reset by a busy conversation
  * would do exactly that.
  */

@@ -100,7 +100,7 @@ describe('every tool is well formed', () => {
 
   it('never marks a mutating tool read-only', () => {
     for (const t of tools) {
-      const mutating = ['add_', 'edit_', 'delete_', 'clear_', 'set_standards', 'furnish_', 'apply_batch', 'fix_', 'undo_', 'load_'].some(
+      const mutating = ['add_', 'edit_room', 'edit_opening', 'edit_furniture', 'edit_plan', 'delete_', 'clear_', 'furnish_', 'apply_batch', 'fix_', 'undo', 'load_'].some(
         (p) => t.name.startsWith(p),
       );
       if (mutating) expect(t.annotations?.readOnlyHint, t.name).not.toBe(true);
@@ -215,18 +215,44 @@ describe('write tools change the plan', () => {
     await pending;
   });
 
-  it('set_standards re-measures against a different body', async () => {
+  it('edit_plan re-measures against a different body', async () => {
     const before = (await call('analyse_access')).body.tested_diameter_mm;
-    await call('set_standards', { mobility_diameter_mm: 700 });
+    await call('edit_plan', { mobility_diameter_mm: 700 });
     const after = (await call('analyse_access')).body.tested_diameter_mm;
     expect(before).toBe(900);
     expect(after).toBe(700);
   });
 
-  it('undo_last rolls a change back', async () => {
+  it('edit_plan renames the drawing, which nothing else could do', async () => {
+    await call('edit_plan', { name: 'Flat 3, Maple Court' });
+    expect(store.plan.name).toBe('Flat 3, Maple Court');
+  });
+
+  it('undo rolls a change back, and can step several at once', async () => {
     await call('edit_room', { room: 'Study', name: 'Changed' });
-    await call('undo_last');
+    await call('undo');
     expect(store.plan.rooms.some((r) => r.name === 'Study')).toBe(true);
+
+    await call('edit_room', { room: 'Study', name: 'One' });
+    await call('edit_room', { room: 'One', name: 'Two' });
+    const stepped = await call('undo', { steps: 2 });
+    expect(stepped.body.steps_taken).toBe(2);
+    expect(store.plan.rooms.some((r) => r.name === 'Study')).toBe(true);
+  });
+
+  it('undo redoes as well', async () => {
+    await call('edit_room', { room: 'Study', name: 'Forward' });
+    await call('undo');
+    await call('undo', { direction: 'redo' });
+    expect(store.plan.rooms.some((r) => r.name === 'Forward')).toBe(true);
+  });
+
+  it('set_view can select what the person would have clicked', async () => {
+    const { body } = await call('set_view', { select: 'Bathroom' });
+    expect(body.ok).toBe(true);
+    expect(store.selection?.kind).toBe('room');
+    await call('set_view', { select: '' });
+    expect(store.selection).toBeNull();
   });
 
   it('every mutating tool reports what it did to the findings', async () => {
@@ -255,7 +281,7 @@ describe('bad arguments come back as prose, never as an exception', () => {
     ['delete_entity', { kind: 'spaceship', reference: 'x' }],
     ['delete_entity', { kind: 'room', reference: 'Nowhere' }],
     ['clear_room', { room: 'Nowhere' }],
-    ['set_standards', { mobility_diameter_mm: 5 }],
+    ['edit_plan', { mobility_diameter_mm: 5 }],
     ['fix_violation', { rule: 'nonsense.rule' }],
     ['apply_batch', { intent: 'x', operations: [] }],
     ['apply_batch', { intent: 'x', operations: [{ op: 'demolish', args: {} }] }],
@@ -291,7 +317,7 @@ describe('the tool set follows the state of the page', () => {
   it('withdraws every write in review mode', () => {
     store.mode = 'review';
     const list = names();
-    for (const name of ['add_room', 'edit_room', 'delete_entity', 'apply_batch', 'fix_violation', 'undo_last']) {
+    for (const name of ['add_room', 'edit_room', 'delete_entity', 'apply_batch', 'fix_violation', 'undo', 'edit_plan']) {
       expect(list, name).not.toContain(name);
     }
     expect(list).toContain('check_plan');

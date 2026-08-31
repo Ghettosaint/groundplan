@@ -79,7 +79,15 @@ export class PlanCanvas {
     new ResizeObserver(() => this.resize()).observe(host);
     this.resize();
     this.bind();
-    store.subscribe(() => this.draw());
+    let seenFitRequest = store.fitRequest;
+    store.subscribe(() => {
+      if (store.fitRequest !== seenFitRequest) {
+        seenFitRequest = store.fitRequest;
+        this.fit();
+        return;
+      }
+      this.draw();
+    });
   }
 
   // ── View maths ─────────────────────────────────────────────────────────────

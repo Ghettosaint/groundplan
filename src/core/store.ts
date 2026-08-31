@@ -100,6 +100,8 @@ class Store {
   requireApproval = true;
   /** Set while an agent tool is running, so the canvas can show presence. */
   agentBusy: string | null = null;
+  /** Bumped when something asks the drawing to refit; the canvas watches it. */
+  fitRequest = 0;
   lastAgentSeen = 0;
 
   private undoStack: Plan[] = [];
@@ -220,6 +222,11 @@ class Store {
 
   select(sel: Selection | null): void {
     this.selection = sel;
+    this.emit();
+  }
+
+  requestFit(): void {
+    this.fitRequest += 1;
     this.emit();
   }
 

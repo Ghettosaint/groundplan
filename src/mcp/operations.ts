@@ -191,18 +191,37 @@ export const RUNNERS: Record<string, (args: ArgMap) => Runner> = {
 
   clear_room: (args) => (draft) => clearRoom(draft, s(args.room)),
 
-  set_standards: (args) => (draft) =>
-    setSettings(draft, {
-      ...(args.mobility_diameter_mm !== undefined
-        ? { mobilityRadius: Math.round(num(args.mobility_diameter_mm, 900)! / 2) }
-        : {}),
-      ...(args.turning_circle_mm !== undefined
-        ? { turningCircle: num(args.turning_circle_mm, 1500)! }
-        : {}),
-      ...(args.min_clear_door_mm !== undefined
-        ? { minClearDoor: num(args.min_clear_door_mm, 815)! }
-        : {}),
-    }),
+  edit_plan: (args) => (draft) => {
+    const messages: string[] = [];
+    if (args.name !== undefined) {
+      const name = s(args.name).trim();
+      if (!name) return { ok: false, error: 'A plan needs a name.' };
+      const before = draft.name;
+      draft.name = name;
+      messages.push(`Renamed the plan from "${before}" to "${name}".`);
+    }
+    const patch: Record<string, number> = {};
+    if (args.mobility_diameter_mm !== undefined) {
+      patch.mobilityRadius = Math.round(num(args.mobility_diameter_mm, 900)! / 2);
+    }
+    if (args.turning_circle_mm !== undefined) patch.turningCircle = num(args.turning_circle_mm, 1500)!;
+    if (args.min_clear_door_mm !== undefined) patch.minClearDoor = num(args.min_clear_door_mm, 815)!;
+    if (args.interior_wall_mm !== undefined) patch.interiorWall = num(args.interior_wall_mm, 100)!;
+    if (args.exterior_wall_mm !== undefined) patch.exteriorWall = num(args.exterior_wall_mm, 250)!;
+    if (Object.keys(patch).length > 0) {
+      const r = setSettings(draft, patch);
+      if (!r.ok) return r;
+      messages.push(r.message);
+    }
+    if (messages.length === 0) {
+      return {
+        ok: false,
+        error: 'Nothing to change.',
+        hint: 'Pass name, mobility_diameter_mm, turning_circle_mm, min_clear_door_mm, interior_wall_mm or exterior_wall_mm.',
+      };
+    }
+    return { ok: true, value: null, message: messages.join(' ') };
+  },
 
   fix_violation: (args) => (draft) => {
     const target = findViolation(
@@ -236,6 +255,9 @@ export const OPERATION_NAMES = Object.keys(RUNNERS);
 export function runBatch(
   draft: Plan,
   operations: { op: string; args: ArgMap }[],
+  /** Optional per-step argument check, so a batched call is held to the same
+   *  standard as a standalone one. */
+  check?: (op: string, args: ArgMap) => { error: string; hint: string } | null,
 ): { ok: true; messages: string[] } | { ok: false; error: string; hint: string } {
   const messages: string[] = [];
   for (const [i, entry] of operations.entries()) {
@@ -245,6 +267,14 @@ export function runBatch(
         ok: false,
         error: `Step ${i + 1}: there is no operation called "${entry.op}".`,
         hint: `Available operations: ${OPERATION_NAMES.join(', ')}.`,
+      };
+    }
+    const rejected = check?.(entry.op, entry.args ?? {});
+    if (rejected) {
+      return {
+        ok: false,
+        error: `Step ${i + 1} (${entry.op}): ${rejected.error}`,
+        hint: `${rejected.hint} Nothing was applied — the batch is all or nothing.`,
       };
     }
     const result = make(entry.args ?? {})(draft);
