@@ -157,6 +157,12 @@ class ToolHost {
       try {
         const controller = new AbortController();
         const handle = this.ctx.registerTool?.(toDescriptor(tool), { signal: controller.signal });
+        // Registration may hand back a promise that settles when the signal
+        // fires. Aborting the signal *is* how we unregister, so that rejection
+        // is expected — but an unhandled one fills the console with red.
+        if (handle && typeof (handle as PromiseLike<unknown>).then === 'function') {
+          void Promise.resolve(handle).catch(() => undefined);
+        }
         const dispose = () => {
           controller.abort();
           if (typeof handle === 'function') {
