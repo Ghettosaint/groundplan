@@ -1,0 +1,21 @@
+{
+  "name": "groundplan",
+  "version": "1.0.0",
+  "description": "Agent-native floor plan studio. Humans draw, agents measure — over WebMCP.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 4173",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mcp-b/global": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2"
+  }
+}
