@@ -469,7 +469,12 @@ export function analyse(plan: Plan): Analysis {
   // Errors and warnings cost the most; on top of that, a home loses marks for
   // floor nobody can get to. The 90% allowance is the floor that sits under
   // wardrobes and behind beds, which no plan ever reclaims.
-  const unreachablePenalty = Math.max(0, 0.9 - reach.ratio) * 50;
+  //
+  // A blank sheet is not a bad design, and a home with no way in is already
+  // being penalised by the errors that says so — charging it twice would be
+  // double-counting.
+  const measurable = plan.rooms.length > 0 && reach.seed >= 0;
+  const unreachablePenalty = measurable ? Math.max(0, 0.9 - reach.ratio) * 50 : 0;
   const score = Math.max(
     0,
     Math.round(100 - errorCount * 12 - warningCount * 4 - unreachablePenalty),

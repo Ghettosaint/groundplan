@@ -208,6 +208,9 @@ describe('degenerate plans', () => {
     expect(a.violations).toHaveLength(0);
     expect(a.stats.totalAreaM2).toBe(0);
     expect(a.stats.reachableRatio).toBe(0);
+    // A blank sheet has nothing wrong with it, and should not be marked down
+    // for floor it does not have.
+    expect(a.stats.score).toBe(100);
     expect(() => planToSvg(empty)).not.toThrow();
   });
 
