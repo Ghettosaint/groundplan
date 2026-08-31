@@ -1057,7 +1057,9 @@ function viewTools(): ToolSpec[] {
  */
 function contextualTools(): ToolSpec[] {
   const out: ToolSpec[] = [];
-  const analysis = analyse(store.plan);
+  // The cached run, not a fresh one: buildTools is called on every state change,
+  // and rasterising the whole plan per mouse-move would be absurd.
+  const analysis = store.analysis;
 
   const proposalHolds = Boolean(store.proposal);
   if (
@@ -1212,11 +1214,28 @@ export function inFlightTools(): string[] {
 }
 
 let pending = 0;
+let lastNames = '';
 
-/** Keeps registration in step with the state, coalescing bursts of changes. */
+/**
+ * Keeps registration in step with the state.
+ *
+ * Cosmetic changes — a description that now lists different rule ids — are
+ * coalesced, because they arrive on every mouse-move during a drag. A change to
+ * *which* tools exist is applied at once: an agent that has just had a proposal
+ * approved should not be told for another quarter of a second that `undo_last`
+ * does not exist, and a debounce that keeps being reset by a busy conversation
+ * would do exactly that.
+ */
 export function wireTools(): void {
   const sync = () => {
+    const desired = buildTools();
+    const names = desired.map((t) => t.name).join(',');
     window.clearTimeout(pending);
+    if (names !== lastNames) {
+      lastNames = names;
+      void host.sync(desired, inFlightTools());
+      return;
+    }
     pending = window.setTimeout(() => void host.sync(buildTools(), inFlightTools()), 60);
   };
   store.subscribe(sync);
