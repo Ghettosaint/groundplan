@@ -148,15 +148,22 @@ export async function thumbnail(underlay: Underlay, maxEdge = 1400): Promise<str
   const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth, img.naturalHeight));
   if (scale === 1 && underlay.src.length < 900_000) return underlay.src;
 
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
-  canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return underlay.src;
-  // White behind it: floor plans are line drawings, and transparency turns
-  // every wall black-on-black once a model renders it.
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL('image/jpeg', 0.85);
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return underlay.src;
+    // White behind it: floor plans are line drawings, and transparency turns
+    // every wall black-on-black once a model renders it.
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/jpeg', 0.85);
+  } catch {
+    // An SVG that pulls in anything external taints the canvas and toDataURL
+    // throws. Handing over the original is worse for size and better than
+    // handing over nothing.
+    return underlay.src;
+  }
 }
