@@ -102,6 +102,12 @@ class Store {
   agentBusy: string | null = null;
   /** Bumped when something asks the drawing to refit; the canvas watches it. */
   fitRequest = 0;
+  /**
+   * True while the drawing is still whatever it was loaded as — a sample, or
+   * the starter flat. Dropping a picture onto a pristine plan can clear it
+   * without asking; dropping one onto work in progress must not.
+   */
+  pristine = true;
   lastAgentSeen = 0;
 
   private undoStack: Plan[] = [];
@@ -143,6 +149,7 @@ class Store {
   ): boolean {
     const draft = this.clone();
     if (mutate(draft) === false) return false;
+    this.pristine = false;
     this.undoStack.push(this.plan);
     if (this.undoStack.length > 200) this.undoStack.shift();
     this.redoStack = [];
@@ -273,6 +280,7 @@ class Store {
     this.undoStack.push(this.plan);
     this.plan = plan;
     this.selection = null;
+    this.pristine = true;
     this.emit();
   }
 

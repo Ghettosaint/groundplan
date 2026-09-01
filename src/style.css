@@ -511,3 +511,26 @@ button.small.icon { padding: 4px 8px; }
   }
   .presence { top: 8px; font-size: 12px; }
 }
+
+/* ── Tracing guide ───────────────────────────────────────────────────────── */
+
+.tracing-guide {
+  position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  max-width: min(760px, calc(100vw - 40px));
+  padding: 10px 14px; border-radius: 12px;
+  background: rgba(23, 26, 31, 0.97); border: 1px solid var(--accent-dim);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+  font-size: 13px; color: var(--text);
+}
+.tracing-guide .step {
+  width: 20px; height: 20px; flex: none; border-radius: 50%;
+  display: grid; place-items: center; font-size: 11px; font-weight: 700;
+  background: var(--accent-dim); color: #eafff5;
+}
+.tracing-guide input[type='number'] { width: 78px; }
+.tracing-guide .unit { color: var(--text-faint); margin-left: -4px; }
+
+@media (max-width: 1080px) {
+  .tracing-guide { top: 8px; font-size: 12px; padding: 8px 11px; }
+}

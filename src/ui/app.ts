@@ -857,11 +857,28 @@ async function acceptImage(file: File): Promise<void> {
     window.alert(err instanceof Error ? err.message : String(err));
     return;
   }
+  // A picture dropped onto the example plan replaces it. Nobody drops their own
+  // floor plan in order to trace it on top of somebody else's flat — and if the
+  // drawing has been worked on, the picture goes underneath instead.
+  const replacing = store.pristine && store.plan.rooms.length > 0;
+  if (replacing) {
+    store.commit(`Started a plan from ${image.label}`, 'human', (draft) => {
+      draft.name = image.label.replace(/\.[a-z0-9]+$/i, '') || 'Traced plan';
+      draft.rooms = [];
+      draft.openings = [];
+      draft.furniture = [];
+    });
+  }
+
   const bounds = planBounds(store.plan);
   const width = store.plan.rooms.length > 0 ? bounds.w : 9000;
   const centre = { x: bounds.x + bounds.w / 2, y: bounds.y + bounds.h / 2 };
   store.setUnderlay(placeUnderlay(image, width, centre));
-  store.note('Added a tracing image', 'human', `${image.label} — set its real width, then lock it.`);
+  store.note(
+    replacing ? 'Started a new plan from a picture' : 'Added a tracing image',
+    'human',
+    `${image.label} — say how wide it really is, then lock it.`,
+  );
   requestAnimationFrame(() => canvas.fit());
 }
 
@@ -968,7 +985,50 @@ async function runExport(kind: string): Promise<void> {
 // ── Floating layer: inspector + approval ─────────────────────────────────────
 
 function renderOverlay(node: HTMLElement): void {
-  fill(node, inspectorCard(), agentPresence(), helpCard());
+  fill(node, tracingGuide(), inspectorCard(), agentPresence(), helpCard());
+}
+
+/**
+ * The whole tracing flow, inline, while it is the thing you are doing.
+ *
+ * Two fields and a button beats hunting through a menu: say how wide the place
+ * really is, lock the picture down, and the next thing to do is written on the
+ * screen rather than left to be guessed at.
+ */
+function tracingGuide(): HTMLElement | null {
+  const under = store.underlay;
+  if (!under || under.locked) return null;
+  return h(
+    'div',
+    { class: 'tracing-guide' },
+    h('span', { class: 'step' }, '1'),
+    h('span', {}, 'Drag the picture into place, then say how wide it really is:'),
+    h('input', {
+      type: 'number',
+      step: '0.1',
+      min: '0.5',
+      value: (under.width / 1000).toFixed(1),
+      'aria-label': 'Real width of the floor plan, in metres',
+      onchange: (e: Event) => {
+        const metres = Number((e.target as HTMLInputElement).value);
+        if (Number.isFinite(metres) && metres > 0) store.setUnderlay(rescale(under, metres * 1000));
+      },
+    }),
+    h('span', { class: 'unit' }, 'm'),
+    h(
+      'button',
+      {
+        class: 'primary small',
+        onclick: () => store.setUnderlay({ ...under, locked: true }),
+      },
+      'Lock it and trace',
+    ),
+    h(
+      'button',
+      { class: 'ghost small', onclick: () => store.setUnderlay(null) },
+      'Remove',
+    ),
+  );
 }
 
 function agentPresence(): HTMLElement | null {
@@ -1438,7 +1498,19 @@ function helpCard(): HTMLElement | null {
           },
           'Show me what it does',
         ),
-        h('button', { class: 'primary', onclick: close }, 'Start drawing'),
+        h('button', { class: 'ghost', onclick: close }, 'Explore this example'),
+        h(
+          'button',
+          {
+            class: 'primary',
+            title: 'Pick a photo or screenshot of a floor plan. It replaces the example.',
+            onclick: () => {
+              close();
+              void pickImage();
+            },
+          },
+          'Use my own floor plan',
+        ),
       ),
     ),
   );
