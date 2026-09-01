@@ -114,3 +114,17 @@ describe('checking a traced plan against the printed numbers', () => {
     expect(String(body.hint)).toMatch(/total_area_m2/);
   });
 });
+
+it('replacing the plan takes the tracing picture with it', () => {
+  store.setUnderlay({
+    src: 'data:image/png;base64,iVBORw0KGgo=',
+    x: 0, y: 0, width: 9000, height: 6000,
+    opacity: 0.55, locked: true, label: 'flat.png',
+  });
+  expect(store.underlay).not.toBeNull();
+
+  // "Blank page" must actually be blank — this is what a person means by it.
+  store.newPlan('Untitled plan');
+  expect(store.underlay).toBeNull();
+  expect(store.plan.rooms).toHaveLength(0);
+});

@@ -276,11 +276,19 @@ class Store {
     this.emit();
   }
 
+  /**
+   * Swaps in a different building: a sample, a blank page, a shared link.
+   *
+   * The tracing picture goes with it. It is a photograph of one particular
+   * home, so leaving it under a different drawing is never what anyone meant —
+   * and "Blank page" that leaves a picture on screen is not a blank page.
+   */
   reset(plan: Plan): void {
     this.undoStack.push(this.plan);
     this.plan = plan;
     this.selection = null;
     this.pristine = true;
+    if (this.underlay) this.setUnderlay(null);
     this.emit();
   }
 
