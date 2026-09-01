@@ -742,7 +742,7 @@ function renderDock(node: HTMLElement): void {
       'div',
       { class: 'dock-actions' },
       menu('Open', [
-        menuButton('Two-bed flat (has faults)', () => loadSample(starterPlan())),
+        menuButton('Example flat — start over', () => loadSample(starterPlan())),
         menuButton('Accessible bungalow (passes)', () => loadSample(accessiblePlan())),
         menuButton('Empty shell', () => loadSample(shellPlan())),
         menuButton('Blank page', () => {
