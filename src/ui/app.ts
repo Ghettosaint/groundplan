@@ -654,7 +654,16 @@ function toolRunner(spec: ToolSpec): HTMLElement {
           store.emit();
           try {
             const out = await spec.execute(args);
-            toolResult = { name: spec.name, text: out.content.map((c) => c.text).join('\n') };
+            toolResult = {
+              name: spec.name,
+              text: out.content
+                .map((c) =>
+                  c.type === 'text'
+                    ? c.text
+                    : `[image · ${c.mimeType} · about ${Math.round(c.data.length / 1400)} kB]`,
+                )
+                .join('\n'),
+            };
           } catch (err) {
             toolResult = { name: spec.name, text: `Threw: ${err instanceof Error ? err.message : String(err)}` };
           }

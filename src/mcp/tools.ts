@@ -37,7 +37,7 @@ import {
   setOpeningWidth,
 } from '../core/ops';
 import { describeJourney, planJourney } from '../core/route';
-import { rescale } from '../core/underlay';
+import { rescale, thumbnail } from '../core/underlay';
 import { analyse } from '../core/rules';
 import { accessiblePlan, shellPlan, starterPlan } from '../core/samples';
 import { shareLink } from '../core/share';
@@ -54,7 +54,7 @@ import {
   type ArgMap,
   type Runner,
 } from './operations';
-import { host, reply, replyError, type ToolContent, type ToolSpec } from './runtime';
+import { host, reply, replyError, replyWithImage, type ToolContent, type ToolSpec } from './runtime';
 import { listProperties, validateArgs, type ToolSchema } from './validate';
 
 // ── Shared schema fragments ──────────────────────────────────────────────────
@@ -284,6 +284,7 @@ function readTools(): ToolSpec[] {
           },
           how_to_work: [
             'Start with get_plan, then check_plan. Findings carry the measured value, the required value and a fix.',
+            'If the person has dropped a picture of a real floor plan onto the page, call get_tracing_image, read the room names and printed areas off it, build the rooms in one apply_batch, then confirm with check_against_source before advising them on anything.',
             'Prefer apply_batch for anything that takes more than one step: it is one approval for the person and it is atomic.',
             'After a change, read issues.resolved and issues.introduced in the result rather than calling check_plan again.',
             'Use show_route when someone asks why somewhere is unreachable — showing beats quoting a number.',
@@ -306,9 +307,9 @@ function readTools(): ToolSpec[] {
               instead: 'show_route sends a body of a stated width along the real route at full scale and stops it where it stops fitting.',
             },
             {
-              asked_for: 'Loading a photo or a PDF of a plan',
-              why: 'A tool cannot read files; only the person can add one, by dropping or pasting an image onto the page.',
-              instead: 'Ask them to drop the picture in. get_plan then reports it, and edit_underlay scales and positions it so you can trace over it.',
+              asked_for: 'Opening a file, a PDF or a link to a plan',
+              why: 'A tool cannot read files or fetch URLs; only the person can add a picture, by dropping or pasting an image onto the page.',
+              instead: 'Ask them to drop the image in. get_tracing_image then hands you the picture itself to read, edit_underlay scales and positions it, and check_against_source tells you whether what you traced matches the printed areas.',
             },
             {
               asked_for: 'Ceiling heights, elevations, sections, finishes or costs',
@@ -340,6 +341,133 @@ function readTools(): ToolSpec[] {
             tools_available: registered.map((t) => t.name),
           },
           note: 'Arguments are checked before anything runs. If you pass something this app does not model, the call is refused and the refusal says why — nothing is silently ignored.',
+        });
+      },
+    },
+
+    {
+      name: 'get_tracing_image',
+      description:
+        'Fetch the floor plan picture the person has dropped onto the page, as an image you can read. Call this when someone says "trace this", "use my plan" or asks about a home whose drawing they have just added. The result carries the picture itself along with the real-world scale and position it has been placed at, so rooms you add line up with what they can see. Read the room names, the printed areas and the dimension strings off it, then build the rooms with apply_batch and confirm the result with check_against_source.',
+      annotations: { title: 'Read the traced picture', readOnlyHint: true },
+      inputSchema: obj({}),
+      execute: async () => {
+        const under = store.underlay;
+        if (!under) {
+          return replyError('Nobody has added a picture to trace.', {
+            hint: 'Ask the person to drop a photo or screenshot of the floor plan onto the page, or paste it there with Ctrl+V. A tool cannot load a file itself.',
+          });
+        }
+        let picture: string;
+        try {
+          picture = await thumbnail(under);
+        } catch (err) {
+          return replyError(`The tracing image could not be read: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        note('get_tracing_image', `Handed over ${under.label}.`);
+        return replyWithImage(
+          {
+            ok: true,
+            summary: `"${under.label}", placed ${under.width} mm wide and ${under.height} mm tall on the drawing.`,
+            placed_at: { x_mm: under.x, y_mm: under.y, width_mm: under.width, height_mm: under.height },
+            scale_note:
+              'The picture spans those world coordinates, so a room drawn at the same coordinates sits on top of the matching part of the image. If the person has not set the real width yet, or your rooms come out the wrong size against it, edit_underlay can rescale it.',
+            how_to_use_it:
+              'Read the room names and the printed areas and dimensions. Build the rooms with add_room using against_room and against_side so they meet edge to edge, in one apply_batch. Then call check_against_source with the areas you read, and correct whatever does not match.',
+            if_you_cannot_see_it:
+              'Some hosts do not pass images through from a tool. If no picture reached you, ask the person to paste the same image into the chat.',
+          },
+          picture,
+        );
+      },
+    },
+
+    {
+      name: 'check_against_source',
+      description:
+        'Check a plan you have traced against the numbers printed on the original drawing. Give the areas you read off the source and it tells you, room by room, how far your version is out and in which direction. Use it after tracing anything: it is the difference between a drawing that looks about right and one that measures right.',
+      annotations: { title: 'Check against the original', readOnlyHint: true },
+      inputSchema: obj({
+        rooms: {
+          type: 'array',
+          description: 'What the source drawing says, as { room, area_m2 } — the room name or id, and its printed area.',
+          items: { type: 'object' },
+        },
+        total_area_m2: { type: 'number', description: "The whole flat's area, if the drawing states one." },
+      }),
+      execute: (args) => {
+        const plan = store.plan;
+        const claims = Array.isArray(args.rooms) ? (args.rooms as unknown[]) : [];
+        if (claims.length === 0 && args.total_area_m2 === undefined) {
+          return replyError('Nothing to check against.', {
+            hint: 'Pass rooms: [{ room: "Kitchen", area_m2: 10.5 }, …] and/or total_area_m2, taken from the printed drawing.',
+          });
+        }
+
+        const rows = claims.map((entry) => {
+          const e = (entry ?? {}) as { room?: unknown; area_m2?: unknown };
+          const ref = s(e.room);
+          const stated = num(e.area_m2);
+          const room = findRoom(plan, ref);
+          if (!room) {
+            return { source_room: ref, verdict: 'not drawn yet', drawn_area_m2: null, source_area_m2: stated ?? null };
+          }
+          const drawn = areaM2(roomRect(room));
+          if (stated === undefined || stated <= 0) {
+            return { source_room: ref, drawn_as: room.name, drawn_area_m2: drawn, verdict: 'no area given to check' };
+          }
+          const off = ((drawn - stated) / stated) * 100;
+          return {
+            source_room: ref,
+            drawn_as: room.name,
+            drawn_area_m2: drawn,
+            source_area_m2: stated,
+            out_by_percent: Math.round(off * 10) / 10,
+            verdict:
+              Math.abs(off) <= 3
+                ? 'matches'
+                : `${Math.abs(off) > 10 ? 'wrong' : 'close, worth a second look'} — drawn ${off > 0 ? 'too big' : 'too small'}`,
+          };
+        });
+
+        const missing = plan.rooms
+          .filter((r) => !claims.some((c) => findRoom(plan, s((c as { room?: unknown }).room))?.id === r.id))
+          .map((r) => r.name);
+
+        const drawnTotal = Math.round(plan.rooms.reduce((sum, r) => sum + areaM2(roomRect(r)), 0) * 100) / 100;
+        const statedTotal = num(args.total_area_m2);
+        const totalOff =
+          statedTotal !== undefined && statedTotal > 0
+            ? Math.round(((drawnTotal - statedTotal) / statedTotal) * 1000) / 10
+            : null;
+
+        const bad = rows.filter((r) => typeof r.verdict === 'string' && !r.verdict.startsWith('matches'));
+        note('check_against_source', `${rows.length - bad.length}/${rows.length} rooms match.`);
+        return reply({
+          ok: true,
+          summary:
+            bad.length > 0
+              ? `${bad.length} of ${rows.length} room(s) do not match the source.`
+              : totalOff === null || Math.abs(totalOff) <= 3
+                ? `Every room checked matches the source within 3%. Drawn total ${drawnTotal} m².`
+                : `Every room you listed matches, but the drawn total is ${drawnTotal} m² against ${statedTotal} m² on the drawing — ${
+                    totalOff > 0 ? 'over' : 'under'
+                  } by ${Math.abs(totalOff)}%. ${
+                    totalOff > 0
+                      ? 'Something is drawn that is not on the original, or a room is larger than it should be.'
+                      : 'There are rooms on the original you have not traced yet.'
+                  }`,
+          rooms: rows,
+          drawn_total_m2: drawnTotal,
+          source_total_m2: statedTotal ?? null,
+          total_out_by_percent: totalOff,
+          rooms_drawn_but_not_listed: missing,
+          hint:
+            bad.length > 0
+              ? 'Correct the sizes with edit_room and check again. A room drawn too small usually means a dimension was read off the wrong wall.'
+              : totalOff !== null && totalOff < -3
+                ? 'Trace the rooms that are still missing, then check again.'
+                : 'Now run check_plan: the tracing is faithful, so the findings are about the real home.',
         });
       },
     },

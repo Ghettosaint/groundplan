@@ -130,3 +130,33 @@ export function loadUnderlay(): Underlay | null {
     return null;
   }
 }
+
+/**
+ * A smaller copy of the tracing image, for handing to a model.
+ *
+ * A phone photograph of a floor plan is several megabytes; nobody wants that in
+ * a tool result, and no model needs it. Fourteen hundred pixels on the long
+ * edge is enough to read dimension strings off an estate agent's drawing.
+ */
+export async function thumbnail(underlay: Underlay, maxEdge = 1400): Promise<string> {
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const el = new Image();
+    el.onload = () => resolve(el);
+    el.onerror = () => reject(new Error('The tracing image did not decode.'));
+    el.src = underlay.src;
+  });
+  const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth, img.naturalHeight));
+  if (scale === 1 && underlay.src.length < 900_000) return underlay.src;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return underlay.src;
+  // White behind it: floor plans are line drawings, and transparency turns
+  // every wall black-on-black once a model renders it.
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', 0.85);
+}

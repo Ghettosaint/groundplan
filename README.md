@@ -65,11 +65,11 @@ This could not be an MCP server sitting behind an API, and it is worth being pre
 
 | State | Registered tools |
 |---|---|
-| Normal editing | 28 |
-| Something selected on the canvas | 29 — an `edit_selection` tool appears, scoped to that entity |
+| Normal editing | 30 |
+| Something selected on the canvas | 31 — an `edit_selection` tool appears, scoped to that entity |
 | Findings outstanding | `fix_violation` appears, with the live rule ids as its enum |
-| **Read-only** | 14 — every mutating tool is unregistered; the agent can look but not touch |
-| **A proposal awaiting approval** | 16 — writes withdrawn, `check_proposal` added, so edits cannot queue up behind a decision the user has not made |
+| **Read-only** | 16 — every mutating tool is unregistered; the agent can look but not touch |
+| **A proposal awaiting approval** | 18 — writes withdrawn, `check_proposal` added, so edits cannot queue up behind a decision the user has not made |
 
 That last row has one deliberate exception, and it is the subtlest thing in the codebase: the tool whose call is *currently blocked on the approval* stays registered. Unregistering a tool aborts its running invocation, so withdrawing it would kill the very call waiting for the user's answer. `ToolHost.sync` takes a `keepAlive` list for exactly this.
 
@@ -117,7 +117,30 @@ That drawing is not a hand-made sample. `npm run docs:render` produces it by rep
 
 Getting there meant fixing the automatic furniture placer, which used to cheerfully park a wardrobe across a doorway and a fridge facing a worktop. It now rules out anything the checker would object to — doorways, door swings, other people's clear floor — and among what is left, picks the position with the most space around it.
 
-## Tracing a real home
+## Getting a real home into it
+
+Most people meet a floor plan as a picture — an estate agent's listing, a photo of a drawing on a wall — and a tool you can only draw into from scratch is a demo, not something you point at the flat you are actually considering.
+
+So the picture is the way in, and it takes three tool calls:
+
+1. The person drops the image onto the page. A tool cannot open a file, and `get_capabilities` says so plainly rather than letting an agent pretend otherwise.
+2. **`get_tracing_image`** hands the picture to the model — downscaled, with the real-world coordinates it has been placed at, so rooms the agent adds land on top of the matching part of the drawing. Hosts that do not pass images through get the text and a note telling them to ask the person to paste it into the chat instead.
+3. The agent reads the room names, printed areas and dimension strings, and builds the rooms in one `apply_batch`.
+
+Then the part that makes it trustworthy:
+
+4. **`check_against_source`** takes the areas the agent read off the original and compares them with what it drew, room by room:
+
+```
+Дневна      drawn 21.81 m²   source 21.76 m²   +0.2%   matches
+Спалня 1    drawn 12.17 m²   source 12.17 m²    0.0%   matches
+Спалня 2    drawn 14.89 m²   source 14.69 m²   +1.3%   matches
+Коридор     —                source 10.51 m²           not drawn yet
+```
+
+If every named room matches but the total falls short, the answer is "there are rooms on the original you have not traced yet". If the total overshoots, something is drawn that is not on the drawing. A tracing that measures right is the difference between advice about a real home and advice about a sketch of one.
+
+## Tracing by hand
 
 Most people meet a floor plan as a picture: an estate agent's listing, a photo of a drawing on a wall, a screenshot of a survey.
 
@@ -127,7 +150,7 @@ The picture is deliberately not part of the plan. Plans travel in share links an
 
 ## The tool surface
 
-27 base tools plus contextual ones. All lengths are millimetres; every reference resolves by id, exact name, partial name or room type, so `"bathroom"`, `"Bathroom"` and `r3` all work.
+29 base tools plus contextual ones. All lengths are millimetres; every reference resolves by id, exact name, partial name or room type, so `"bathroom"`, `"Bathroom"` and `r3` all work.
 
 ### Reading
 
@@ -143,6 +166,8 @@ The picture is deliberately not part of the plan. Plans travel in share links an
 | `get_activity` | The shared edit history, attributed |
 | `get_capabilities` | What the app models, how to work with it, and what it cannot do — with a reason and an alternative for each limit |
 | `export_plan` | A share link carrying the whole drawing in its URL, a markdown room schedule, or the plan as SVG |
+| `get_tracing_image` | The floor plan picture the person dropped on the page, as an image the model can read, with the scale it sits at |
+| `check_against_source` | What was traced, compared room by room with the areas printed on the original |
 
 ### Writing
 
@@ -296,6 +321,8 @@ Things worth asking for:
 
 > Design me a one-bedroom flat for a wheelchair user, then send me a link.
 
+> I've dropped my flat's floor plan on the page. Trace it, then tell me how to get more room in the kitchen.
+
 > Would this flat work for my mother? She uses a walking frame now but may need a chair later.
 
 Without WebMCP support the app is an ordinary, complete floor plan editor. That progressive-enhancement contract is deliberate.
@@ -327,7 +354,7 @@ src/
   ui/
     canvas.ts     The drawing sheet, direct manipulation, keyboard control, ghost previews
     app.ts        Header, findings, activity, tool inspector, approval card, exports
-tests/            187 tests. Beyond the unit tests, unscripted.test.ts asks for
+tests/            205 tests. Beyond the unit tests, unscripted.test.ts asks for
                   things the app cannot do — L-shapes, storeys, ceiling heights,
                   3D — and checks each is refused with a reason rather than
                   half-done; tools.test.ts drives every

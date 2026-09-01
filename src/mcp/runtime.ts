@@ -24,8 +24,18 @@ export interface ToolAnnotations {
   openWorldHint?: boolean;
 }
 
+/**
+ * A tool result block. Text is the workhorse; an image block exists so the page
+ * can hand a picture the person dropped on it straight to the model, which is
+ * what turns "trace this floor plan" from two steps into one. Hosts that do not
+ * surface images simply ignore the block, so the text has to stand alone.
+ */
+export type ToolContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image'; data: string; mimeType: string };
+
 export interface ToolContent {
-  content: { type: 'text'; text: string }[];
+  content: ToolContentBlock[];
   isError?: boolean;
 }
 
@@ -224,6 +234,24 @@ export const host = new ToolHost();
  */
 export function reply(payload: Record<string, unknown>): ToolContent {
   return { content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }] };
+}
+
+/**
+ * A result that carries a picture as well as the words. The text goes first so
+ * a host that drops the image still returns something useful.
+ */
+export function replyWithImage(
+  payload: Record<string, unknown>,
+  dataUrl: string,
+): ToolContent {
+  const match = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl);
+  if (!match) return reply(payload);
+  return {
+    content: [
+      { type: 'text', text: JSON.stringify(payload, null, 2) },
+      { type: 'image', mimeType: match[1]!, data: match[2]! },
+    ],
+  };
 }
 
 export function replyError(summary: string, extra?: Record<string, unknown>): ToolContent {
