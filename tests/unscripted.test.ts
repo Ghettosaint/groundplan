@@ -244,3 +244,24 @@ describe('references resolve to the thing that was named', () => {
     expect(store.selection).toEqual({ kind: 'furniture', id: item.id });
   });
 });
+
+describe('an empty drawing is never a dead end', () => {
+  it('a blank page still offers every way back', async () => {
+    // Reached by clearing an example, tracing a picture and then removing it,
+    // or asking for a blank page. A reload takes the undo history with it, so
+    // "press Ctrl+Z" is not an answer.
+    const blank = buildTools().find((t) => t.name === 'load_sample')!;
+    const pending = blank.execute({ which: 'blank' });
+    await new Promise((r) => setTimeout(r, 0));
+    store.proposal?.resolve(true);
+    await pending;
+
+    expect(store.plan.rooms).toHaveLength(0);
+    expect(store.underlay).toBeNull();
+    // The tools that get you out of it are all still registered.
+    const names = buildTools().map((t) => t.name);
+    for (const escape of ['load_sample', 'add_room', 'get_capabilities']) {
+      expect(names).toContain(escape);
+    }
+  });
+});

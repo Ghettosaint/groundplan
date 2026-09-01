@@ -985,7 +985,45 @@ async function runExport(kind: string): Promise<void> {
 // ── Floating layer: inspector + approval ─────────────────────────────────────
 
 function renderOverlay(node: HTMLElement): void {
-  fill(node, tracingGuide(), inspectorCard(), agentPresence(), helpCard());
+  fill(node, emptyState(), tracingGuide(), inspectorCard(), agentPresence(), helpCard());
+}
+
+/**
+ * What to do with a blank page.
+ *
+ * You can arrive here several ways — a blank plan, a traced picture that was
+ * then removed, an example cleared and undone past. Every one of them used to
+ * leave an empty grid and no hint, and a reload takes the undo history with it,
+ * so there was no way back at all. An empty drawing should always offer its
+ * three ways forward.
+ */
+function emptyState(): HTMLElement | null {
+  if (store.plan.rooms.length > 0 || store.underlay || store.proposal) return null;
+  return h(
+    'div',
+    { class: 'empty-state' },
+    h('h3', {}, 'Nothing drawn yet'),
+    h('p', {}, 'Start from a picture of a real home, from a worked example, or from scratch.'),
+    h(
+      'div',
+      { class: 'empty-actions' },
+      h('button', { class: 'primary', onclick: () => void pickImage() }, 'Trace a picture'),
+      h('button', { class: 'ghost', onclick: () => loadSample(starterPlan()) }, 'Open the example flat'),
+      h(
+        'button',
+        {
+          class: 'ghost',
+          onclick: () => {
+            paletteOpen = true;
+            paletteTab = 'rooms';
+            store.emit();
+          },
+        },
+        'Draw a room',
+      ),
+    ),
+    h('p', { class: 'sub' }, 'You can also drop or paste a floor plan image anywhere on this page.'),
+  );
 }
 
 /**
