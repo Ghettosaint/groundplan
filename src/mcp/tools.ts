@@ -277,7 +277,7 @@ function readTools(): ToolSpec[] {
           summary:
             'Groundplan is a single-storey floor plan editor with an accessibility rule engine. You can read and measure the drawing, and propose changes that the person approves. Lengths are millimetres; x grows east and y grows south.',
           the_model: {
-            rooms: 'Axis-aligned rectangles that meet edge to edge. Walls are derived from where rooms touch, not drawn separately.',
+            rooms: 'Axis-aligned rectangles that meet edge to edge. Walls are derived from where rooms touch, not drawn separately. Rooms joined by an archway 1400 mm or wider count as one space for floor area, daylight and turning circle — that is how open plan and L-shaped rooms are drawn.',
             openings: 'Doors, archways and windows cut into a room wall, given a side and an offset along it.',
             furniture: 'Rectangles from a fixed catalogue, rotated in quarter turns, each with the clear floor it needs in front.',
             settings: 'The body diameter, turning circle and clear doorway the plan is checked against — all adjustable with edit_plan.',
@@ -293,7 +293,7 @@ function readTools(): ToolSpec[] {
             {
               asked_for: 'L-shaped, curved or angled rooms',
               why: 'Rooms are axis-aligned rectangles.',
-              instead: 'Draw the space as two or more rectangles that touch, joined by an archway 1400 mm or wider — it reads and measures as one room.',
+              instead: 'Draw the space as two or more rectangles that touch, joined by an archway 1400 mm or wider. The rule engine then pools their floor area, daylight and turning circle, so it is measured as one room rather than a big room and a failing small one.',
             },
             {
               asked_for: 'More than one storey, or stairs',

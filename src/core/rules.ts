@@ -82,6 +82,58 @@ export interface Analysis {
   rooms: RoomStats[];
 }
 
+/**
+ * Rooms joined by a wide archway are one space.
+ *
+ * That is what open plan means, and it is what makes the L-shaped-room advice
+ * honest: told to draw an L as two rectangles with an archway between them, an
+ * agent used to get a plan that failed on floor area and daylight for the
+ * smaller leg. A 1400 mm opening with no leaf is not a doorway between two
+ * rooms — it is one room with a pinch in the middle, and the rules that are
+ * about *space* rather than *access* should see it that way.
+ *
+ * Returns each room's group, largest room first.
+ */
+export function spaces(plan: Plan): Map<string, Room[]> {
+  const parent = new Map<string, string>(plan.rooms.map((r) => [r.id, r.id]));
+  const find = (id: string): string => {
+    let root = id;
+    while (parent.get(root) !== root) root = parent.get(root)!;
+    return root;
+  };
+  const union = (a: string, b: string) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+
+  for (const op of plan.openings) {
+    if (op.kind !== 'archway' || op.width < 1400) continue;
+    const other = openingNeighbour(plan, op);
+    if (other && parent.has(op.roomId) && parent.has(other)) union(op.roomId, other);
+  }
+
+  const groups = new Map<string, Room[]>();
+  for (const room of plan.rooms) {
+    const key = find(room.id);
+    const list = groups.get(key) ?? [];
+    list.push(room);
+    groups.set(key, list);
+  }
+  for (const list of groups.values()) list.sort((a, b) => b.w * b.h - a.w * a.h);
+
+  const byRoom = new Map<string, Room[]>();
+  for (const room of plan.rooms) byRoom.set(room.id, groups.get(find(room.id))!);
+  return byRoom;
+}
+
+/** The name a group goes by: its largest room, plus how many it takes in. */
+function spaceName(group: Room[]): string {
+  return group.length === 1
+    ? group[0]!.name
+    : `${group[0]!.name} (open plan with ${group.length - 1} more)`;
+}
+
 const WINDOW_DEFAULT_SILL = 900;
 const WINDOW_DEFAULT_HEAD = 2100;
 
@@ -97,6 +149,9 @@ function round(v: number, dp = 0): number {
 
 export function analyse(plan: Plan): Analysis {
   const grid = rasterise(plan);
+  const groups = spaces(plan);
+  // Report a space once, through its largest room.
+  const leads = (room: Room) => groups.get(room.id)![0]!.id === room.id;
   const reach = reachableFrom(plan, grid, plan.settings.mobilityRadius);
   const route = widestPaths(grid, reach.seed);
   const v: Violation[] = [];
@@ -125,36 +180,45 @@ export function analyse(plan: Plan): Analysis {
     }
   }
 
-  // ── Room size and proportion ──────────────────────────────────────────────
+  // ── Room size and proportion, measured per space ──────────────────────────
   for (const room of plan.rooms) {
+    if (!leads(room)) continue;
+    const group = groups.get(room.id)!;
     const meta = ROOM_TYPES[room.type];
-    const a = areaM2(roomRect(room));
-    if (a < meta.minArea) {
+    // A space has to satisfy the most demanding room in it.
+    const needArea = Math.max(...group.map((r) => ROOM_TYPES[r.type].minArea));
+    const needDim = Math.max(...group.map((r) => ROOM_TYPES[r.type].minDimension));
+    const a = round(group.reduce((sum, r) => sum + areaM2(roomRect(r)), 0), 2);
+    const label = spaceName(group);
+
+    if (a < needArea) {
       v.push({
         rule: 'room.min_area',
         severity: 'error',
-        title: `${room.name} is undersized`,
-        detail: `${a} m² of floor against a ${meta.minArea} m² minimum for a ${meta.label.toLowerCase()}.`,
-        entities: [room.id],
+        title: `${label} is undersized`,
+        detail: `${a} m² of floor against a ${needArea} m² minimum for a ${meta.label.toLowerCase()}.`,
+        entities: group.map((r) => r.id),
         measured: a,
-        required: meta.minArea,
+        required: needArea,
         unit: 'm2',
         fix: `Call edit_room on "${room.name}" with a bigger width_mm/depth_mm, or change its type.`,
         at: rectCentre(roomRect(room)),
       });
     }
+    // The narrowest dimension is judged on the largest room of the space: an
+    // L-shaped living room is not "too narrow" because its short leg is.
     const minDim = Math.min(room.w, room.h);
-    if (minDim < meta.minDimension) {
+    if (minDim < needDim) {
       v.push({
         rule: 'room.min_dimension',
         severity: 'warning',
-        title: `${room.name} is too narrow`,
-        detail: `Narrowest clear dimension is ${minDim} mm; a ${meta.label.toLowerCase()} wants at least ${meta.minDimension} mm.`,
-        entities: [room.id],
+        title: `${label} is too narrow`,
+        detail: `Narrowest clear dimension is ${minDim} mm; a ${meta.label.toLowerCase()} wants at least ${needDim} mm.`,
+        entities: group.map((r) => r.id),
         measured: minDim,
-        required: meta.minDimension,
+        required: needDim,
         unit: 'mm',
-        fix: `Call edit_room on "${room.name}" so both width_mm and depth_mm are at least ${meta.minDimension} mm.`,
+        fix: `Call edit_room on "${room.name}" so both width_mm and depth_mm are at least ${needDim} mm.`,
         at: rectCentre(roomRect(room)),
       });
     }
@@ -263,16 +327,20 @@ export function analyse(plan: Plan): Analysis {
       });
     }
 
-    if (meta.needsTurningCircle) {
-      const best = maxClearanceIn(grid, roomRect(room));
+    if (meta.needsTurningCircle && leads(room)) {
+      // Somewhere in the space, not necessarily in this rectangle.
+      const group = groups.get(room.id)!;
+      const best = group
+        .map((r) => maxClearanceIn(grid, roomRect(r)))
+        .sort((a, b) => b.value - a.value)[0]!;
       const circle = Math.round(best.value * 2);
       if (circle < plan.settings.turningCircle) {
         v.push({
           rule: 'access.turning_circle',
           severity: circle < plan.settings.turningCircle - 300 ? 'error' : 'warning',
-          title: `No turning circle in ${room.name}`,
+          title: `No turning circle in ${spaceName(group)}`,
           detail: `Largest clear circle is ${circle} mm across; ${plan.settings.turningCircle} mm is needed to turn a wheelchair on the spot.`,
-          entities: [room.id],
+          entities: group.map((r) => r.id),
           measured: circle,
           required: plan.settings.turningCircle,
           unit: 'mm',
@@ -286,28 +354,42 @@ export function analyse(plan: Plan): Analysis {
   // ── Daylight and escape ───────────────────────────────────────────────────
   for (const room of plan.rooms) {
     const meta = ROOM_TYPES[room.type];
-    if (!meta.habitable || meta.minGlazingRatio === 0) continue;
-    const windows = plan.openings.filter(
+    if (meta.habitable && meta.minGlazingRatio > 0 && leads(room)) {
+      // One space, one daylight sum: a window in the open-plan half lights both.
+      const group = groups.get(room.id)!;
+      const ids = new Set(group.map((r) => r.id));
+      const windows = plan.openings.filter(
+        (o) => o.kind === 'window' && ids.has(o.roomId) && openingNeighbour(plan, o) === null,
+      );
+      const glazing = windows.reduce((sum, w) => sum + windowAreaM2(w), 0);
+      // Glazing pools across the space — a window in the open half lights both
+      // — but only the habitable floor generates a requirement. Merging a hall
+      // into a living room does not make the living room need more daylight.
+      const habitable = group.filter((r) => ROOM_TYPES[r.type].habitable);
+      const floor = round(habitable.reduce((sum, r) => sum + areaM2(roomRect(r)), 0), 2);
+      const ratio = Math.max(...habitable.map((r) => ROOM_TYPES[r.type].minGlazingRatio));
+      const needed = round(floor * ratio, 2);
+      if (glazing < needed) {
+        v.push({
+          rule: 'room.daylight',
+          severity: windows.length === 0 ? 'error' : 'warning',
+          title: `${spaceName(group)} is short of daylight`,
+          detail: `${round(glazing, 2)} m² of glazing for ${floor} m² of floor; habitable rooms want ${Math.round(ratio * 100)}% (${needed} m²).`,
+          entities: group.map((r) => r.id),
+          measured: round(glazing, 2),
+          required: needed,
+          unit: 'm2',
+          fix: `Call add_opening with kind="window", exterior=true and room="${room.name}" — a 1200 mm window adds 1.44 m².`,
+          at: rectCentre(roomRect(room)),
+        });
+      }
+    }
+    // Escape stays a per-room test: you cannot climb out of the next room's
+    // window, however open plan the two of them are.
+    const ownWindows = plan.openings.filter(
       (o) => o.kind === 'window' && o.roomId === room.id && openingNeighbour(plan, o) === null,
     );
-    const glazing = windows.reduce((sum, w) => sum + windowAreaM2(w), 0);
-    const floor = areaM2(roomRect(room));
-    const needed = round(floor * meta.minGlazingRatio, 2);
-    if (glazing < needed) {
-      v.push({
-        rule: 'room.daylight',
-        severity: windows.length === 0 ? 'error' : 'warning',
-        title: `${room.name} is short of daylight`,
-        detail: `${round(glazing, 2)} m² of glazing for ${floor} m² of floor; habitable rooms want ${Math.round(meta.minGlazingRatio * 100)}% (${needed} m²).`,
-        entities: [room.id],
-        measured: round(glazing, 2),
-        required: needed,
-        unit: 'm2',
-        fix: `Call add_opening with kind="window", exterior=true and room="${room.name}" — a 1200 mm window adds 1.44 m².`,
-        at: rectCentre(roomRect(room)),
-      });
-    }
-    if (room.type === 'bedroom' && windows.length === 0) {
+    if (room.type === 'bedroom' && ownWindows.length === 0) {
       v.push({
         rule: 'bedroom.egress',
         severity: 'error',

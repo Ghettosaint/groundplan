@@ -40,7 +40,7 @@ export interface Rejection {
 const MISCONCEPTIONS: { keys: string[]; says: string }[] = [
   {
     keys: ['shape', 'polygon', 'points', 'vertices', 'outline', 'corners', 'curve', 'radius'],
-    says: 'Rooms in Groundplan are rectangles. An L-shaped or irregular space is drawn as two or more rooms that meet edge to edge, with a wide archway between them — add_opening with kind "archway" and a width of 1400 mm or more reads as one continuous space.',
+    says: 'Rooms in Groundplan are rectangles. An L-shaped or irregular space is drawn as two or more rooms that meet edge to edge, joined by add_opening with kind "archway" and a width of 1400 mm or more. That is not a workaround: the rule engine then pools their floor area, daylight and turning circle and measures them as one room, so the short leg is never failed for being small.',
   },
   {
     keys: ['floor', 'storey', 'story', 'level', 'basement', 'upstairs', 'stairs', 'staircase'],

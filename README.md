@@ -231,6 +231,8 @@ Toggle **Clearance heatmap** to see step 2 and **Step-free reach** to see steps 
 | `furniture.approach` | The clear floor each fitting needs in front of it is actually clear |
 | `furniture.overlap` / `furniture.outside` | Nothing occupies the same floor or sticks through a wall |
 | `room.overlap` | Rooms meet edge to edge, never intersect |
+
+Rooms joined by an **archway 1400 mm or wider count as one space** for floor area, daylight and turning circle. That is what open plan means, and it is what makes the answer to "draw me an L-shaped living room" honest: two rectangles and a wide archway, measured as one room rather than as a big room and a failing small one. A 900 mm door is still a doorway between two separate rooms.
 | `kitchen.work_triangle` | Sink–hob–fridge triangle within 3.6–6.6 m (advisory) |
 
 Thresholds follow widely used residential guidance — ADA/ANSI A117.1 and ISO 21542 for clearances, typical habitable-room minimums elsewhere. They are adjustable at runtime via `edit_plan`, because a plan checked for a walking frame is a different plan from one checked for a wheelchair. **Groundplan is a design aid, not a code compliance certificate.**
