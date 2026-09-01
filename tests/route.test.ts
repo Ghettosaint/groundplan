@@ -127,3 +127,17 @@ describe('journeys that cannot start', () => {
     expect(journey === null || typeof journey.arrives === 'boolean').toBe(true);
   });
 });
+
+it('states the margin, not the bottleneck, as the spare room', () => {
+  const plan = starterPlan();
+  const grid = rasterise(plan);
+  const bath = plan.rooms.find((r) => r.type === 'bathroom')!;
+  // A walking frame gets through the 800 mm bathroom door with 100 mm over.
+  const journey = planJourney(plan, grid, bath.id, 350)!;
+  expect(journey.arrives).toBe(true);
+  const sentence = describeJourney(journey, 700);
+  expect(sentence).toContain('tightest point on the way is 800 mm');
+  expect(sentence).toContain('100 mm more than it needs');
+  // The old wording claimed the bottleneck width itself was the spare room.
+  expect(sentence).not.toContain('800 mm to spare');
+});

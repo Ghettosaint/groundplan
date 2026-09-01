@@ -149,9 +149,14 @@ export function positionAt(journey: Journey, distance: number): { x: number; y: 
 export function describeJourney(journey: Journey, targetDiameter: number): string {
   const metres = (journey.distanceMm / 1000).toFixed(1);
   if (journey.arrives) {
+    // widthMm is the bottleneck, not the margin — saying "800 mm to spare" of a
+    // 700 mm body through an 800 mm door reads as eight times the room there is.
+    const spare = journey.widthMm - targetDiameter;
+    const margin =
+      spare > 0 ? `${spare} mm more than it needs` : 'exactly what it needs, with nothing to spare';
     return `A ${targetDiameter} mm body reaches ${journey.targetRoomName} — ${metres} m through ${journey.rooms.join(
       ' → ',
-    )}, with ${journey.widthMm} mm to spare at the tightest point.`;
+    )}. The tightest point on the way is ${journey.widthMm} mm, ${margin}.`;
   }
   return `A ${targetDiameter} mm body gets as far as ${
     journey.rooms[journey.rooms.length - 1] ?? 'the entrance'
