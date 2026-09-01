@@ -295,7 +295,7 @@ npm install && npm run dev
 Then open <http://localhost:5173>.
 
 ```bash
-npm test          # 187 tests: geometry, occupancy, routing, rules, tools, exports, fuzzing
+npm test          # 208 tests: geometry, occupancy, routing, rules, tools, exports, fuzzing
 npm run build     # type-check and bundle to dist/ — a static site, no backend
 npm run docs:render   # regenerate the drawings in docs/
 ```
@@ -354,7 +354,7 @@ src/
   ui/
     canvas.ts     The drawing sheet, direct manipulation, keyboard control, ghost previews
     app.ts        Header, findings, activity, tool inspector, approval card, exports
-tests/            205 tests. Beyond the unit tests, unscripted.test.ts asks for
+tests/            208 tests. Beyond the unit tests, unscripted.test.ts asks for
                   things the app cannot do — L-shapes, storeys, ceiling heights,
                   3D — and checks each is refused with a reason rather than
                   half-done; tools.test.ts drives every
