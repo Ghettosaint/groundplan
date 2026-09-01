@@ -39,7 +39,18 @@ describe('handing the picture over', () => {
     const { isError, body } = await call('get_tracing_image');
     expect(isError).toBe(true);
     expect(String(body.hint)).toMatch(/drop|paste/i);
-    expect(String(body.hint)).toMatch(/cannot load a file/i);
+    expect(String(body.hint)).toMatch(/cannot open a file/i);
+  });
+
+  it('offers a way through when the browser will not accept a dropped file', async () => {
+    // Embedded browsers — ChatGPT's among them — may intercept a drop or a
+    // paste before the page sees it. The agent must not be left insisting on
+    // something the person cannot do.
+    const { body } = await call('get_tracing_image');
+    const fallback = String(body.if_that_is_not_possible);
+    expect(fallback).toMatch(/attach the picture to this conversation/i);
+    expect(fallback).toMatch(/check_against_source/);
+    expect(fallback).toMatch(/tracing aid/i);
   });
 });
 

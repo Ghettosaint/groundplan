@@ -284,7 +284,7 @@ function readTools(): ToolSpec[] {
           },
           how_to_work: [
             'Start with get_plan, then check_plan. Findings carry the measured value, the required value and a fix.',
-            'If the person has dropped a picture of a real floor plan onto the page, call get_tracing_image, read the room names and printed areas off it, build the rooms in one apply_batch, then confirm with check_against_source before advising them on anything.',
+            'To work on a real home: get the floor plan picture in front of you — get_tracing_image if they dropped it onto the page, or simply read it from the conversation if they attached it there — then read the room names and printed areas off it, build the rooms in one apply_batch, and confirm with check_against_source before advising them on anything.',
             'Prefer apply_batch for anything that takes more than one step: it is one approval for the person and it is atomic.',
             'After a change, read issues.resolved and issues.introduced in the result rather than calling check_plan again.',
             'Use show_route when someone asks why somewhere is unreachable — showing beats quoting a number.',
@@ -309,7 +309,7 @@ function readTools(): ToolSpec[] {
             {
               asked_for: 'Opening a file, a PDF or a link to a plan',
               why: 'A tool cannot read files or fetch URLs; only the person can add a picture, by dropping or pasting an image onto the page.',
-              instead: 'Ask them to drop the image in. get_tracing_image then hands you the picture itself to read, edit_underlay scales and positions it, and check_against_source tells you whether what you traced matches the printed areas.',
+              instead: 'Either ask them to drop the image onto the page — get_tracing_image then hands you the picture to read — or, if their browser will not allow that, ask them to attach it to the conversation and read it there. Either way you build the rooms with apply_batch and confirm the result with check_against_source; the picture on the page is a tracing aid for the person, not something the app measures.',
             },
             {
               asked_for: 'Ceiling heights, elevations, sections, finishes or costs',
@@ -355,7 +355,9 @@ function readTools(): ToolSpec[] {
         const under = store.underlay;
         if (!under) {
           return replyError('Nobody has added a picture to trace.', {
-            hint: 'Ask the person to drop a photo or screenshot of the floor plan onto the page, or paste it there with Ctrl+V. A tool cannot load a file itself.',
+            hint: 'Ask them to drop a photo or screenshot of the floor plan onto the page, paste it there with Ctrl+V, or press "Use my own floor plan" on the welcome card. A tool cannot open a file itself.',
+            if_that_is_not_possible:
+              'Some embedded browsers will not let a page receive a dropped file. It does not matter: ask them to attach the picture to this conversation instead. You can read it there and build the rooms with add_room and apply_batch exactly the same way, and check_against_source will still tell you whether what you drew matches the printed areas. The picture on the page is only a tracing aid for the person — nothing measures it.',
           });
         }
         let picture: string;
@@ -375,7 +377,7 @@ function readTools(): ToolSpec[] {
             how_to_use_it:
               'Read the room names and the printed areas and dimensions. Build the rooms with add_room using against_room and against_side so they meet edge to edge, in one apply_batch. Then call check_against_source with the areas you read, and correct whatever does not match.',
             if_you_cannot_see_it:
-              'Some hosts do not pass images through from a tool. If no picture reached you, ask the person to paste the same image into the chat.',
+              'Some hosts do not pass images out of a tool result. If no picture reached you, ask the person to attach the same image to the conversation — reading it there works just as well, and nothing else about the workflow changes.',
           },
           picture,
         );
