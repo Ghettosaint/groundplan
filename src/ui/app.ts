@@ -8,7 +8,7 @@
 
 import { CATALOG, ROOM_TYPES, ROOM_TYPE_KEYS } from '../core/catalog';
 import { applyFix } from '../core/fixes';
-import { areaM2, planBounds, roomRect } from '../core/geometry';
+import { areaM2, openingNeighbour, planBounds, roomRect } from '../core/geometry';
 import {
   addFurniture,
   addRoom,
@@ -42,6 +42,14 @@ import { host, type ToolSpec } from '../mcp/runtime';
 import { PlanCanvas } from './canvas';
 
 type Tab = 'issues' | 'activity' | 'tools';
+
+/** Findings the route playback illustrates rather than contradicts. */
+const ROUTE_EXPLAINS = new Set([
+  'access.unreachable',
+  'access.partial',
+  'plan.circulation',
+  'door.clear_width',
+]);
 
 let tab: Tab = 'issues';
 let canvas: PlanCanvas;
@@ -428,21 +436,18 @@ function issueCard(v: Violation): HTMLElement {
     h(
       'div',
       { class: 'issue-actions' },
-      v.rule.startsWith('access.') || v.rule === 'plan.circulation'
+      // Only findings a journey actually explains. A missing turning circle is
+      // about space inside a room, and playing a route that arrives cleanly
+      // would argue against the finding rather than illustrate it.
+      ROUTE_EXPLAINS.has(v.rule)
         ? h(
             'button',
             {
               class: 'small primary',
-              title: 'Watch it happen on the drawing',
+              title: 'Watch a wheelchair try it, at full scale on the drawing',
               onclick: (e: Event) => {
                 e.stopPropagation();
-                const room =
-                  v.entities.map((id) => findRoom(store.plan, id)).find(Boolean) ??
-                  store.analysis.rooms
-                    .filter((r) => r.routeWidthMm > 0)
-                    .sort((a, b) => a.routeWidthMm - b.routeWidthMm)
-                    .map((r) => findRoom(store.plan, r.id))
-                    .find(Boolean);
+                const room = roomBehind(v.entities) ?? tightestRoom();
                 if (room) playRoute(room.id);
               },
             },
@@ -1291,6 +1296,38 @@ function paletteCard(): HTMLElement {
  * Walks a body from the front door to a room and plays it back on the drawing.
  * The same call the `show_route` tool makes.
  */
+/**
+ * The room a finding is about.
+ *
+ * A doorway sits between two rooms, and the one worth walking to is whichever
+ * the door strands — the harder of the two to reach, not simply the one the
+ * opening happens to be anchored to.
+ */
+function roomBehind(entities: string[]): { id: string } | null {
+  for (const id of entities) {
+    const opening = findOpening(store.plan, id);
+    if (opening) {
+      const sides = [opening.roomId, openingNeighbour(store.plan, opening)]
+        .filter((x): x is string => Boolean(x))
+        .map((roomId) => store.analysis.rooms.find((r) => r.id === roomId))
+        .filter((r): r is NonNullable<typeof r> => Boolean(r))
+        .sort((a, b) => a.routeWidthMm - b.routeWidthMm);
+      if (sides[0]) return { id: sides[0].id };
+    }
+    const room = store.plan.rooms.find((r) => r.id === id);
+    if (room) return room;
+  }
+  return null;
+}
+
+/** Whichever room is hardest to get to — the most interesting one to watch. */
+function tightestRoom(): { id: string } | null {
+  const worst = store.analysis.rooms
+    .filter((r) => r.routeWidthMm > 0)
+    .sort((a, b) => a.routeWidthMm - b.routeWidthMm)[0];
+  return worst ? { id: worst.id } : (store.plan.rooms[store.plan.rooms.length - 1] ?? null);
+}
+
 function playRoute(roomId: string, diameterMm?: number): void {
   const plan = store.plan;
   const diameter = diameterMm ?? plan.settings.mobilityRadius * 2;
@@ -1379,6 +1416,19 @@ function helpCard(): HTMLElement | null {
       h(
         'div',
         { class: 'help-actions' },
+        h(
+          'button',
+          {
+            class: 'ghost',
+            title: 'Watch a 900 mm wheelchair try to reach the hardest room in this flat',
+            onclick: () => {
+              close();
+              const room = tightestRoom();
+              if (room) setTimeout(() => playRoute(room.id), 250);
+            },
+          },
+          'Show me what it does',
+        ),
         h('button', { class: 'primary', onclick: close }, 'Start drawing'),
       ),
     ),

@@ -90,6 +90,8 @@ Run it twice on the same flat and the point makes itself:
 
 Same door. Same drawing. The difference is 100 mm, and until you see a disc the size of a wheelchair fail to fit through it, it is just a number in a table.
 
+You do not need an agent to see it: every finding a journey can explain carries a **Show me** button, and the welcome card offers to demonstrate it on the way in.
+
 `compare_standards` makes the same point in one line, for the question people actually ask — *would this work for my mother?*
 
 ```

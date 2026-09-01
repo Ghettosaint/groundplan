@@ -216,9 +216,6 @@ class Store {
   get canRedo(): boolean {
     return this.redoStack.length > 0;
   }
-  get undoDepth(): number {
-    return this.undoStack.length;
-  }
 
   select(sel: Selection | null): void {
     this.selection = sel;

@@ -434,7 +434,7 @@ button.small.icon { padding: 4px 8px; }
 .help .steps { margin: 0 0 16px; padding-left: 20px; color: var(--text-dim); }
 .help .steps li { margin-bottom: 8px; }
 .help .sub { font-size: 12.5px; color: var(--text-faint); }
-.help-actions { display: flex; justify-content: flex-end; }
+.help-actions { display: flex; justify-content: flex-end; gap: 9px; }
 
 .inspector.palette.collapsed {
   display: flex; align-items: center; gap: 12px; width: auto; max-width: 360px;

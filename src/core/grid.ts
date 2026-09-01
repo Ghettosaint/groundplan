@@ -12,7 +12,6 @@
  */
 
 import {
-  doorSwingRect,
   furnitureRect,
   openingRect,
   planBounds,
@@ -40,10 +39,13 @@ export interface Grid {
 }
 
 export interface Reachability {
-  /** 1 on every square of floor a body of that radius sweeps on its way round. */
+  /**
+   * 1 on every square of floor a body of that radius sweeps on its way round.
+   * Not the positions its centre can take: the flood fill finds those, and the
+   * result is then grown by the same radius, because "can I get there" means
+   * the floor the chair passes over, not where its axle can sit.
+   */
   mask: Uint8Array;
-  /** 1 only where the *centre* of that body can sit. */
-  centres: Uint8Array;
   /** Reachable floor area, m². */
   areaM2: number;
   /** Total floor area, m². */
@@ -247,12 +249,12 @@ export function reachableFrom(
   const found = seedPoint ?? entryPoint(plan, g);
   const start = found ? { x: found.x, y: found.y } : null;
   if (!start) {
-    return { mask, centres: mask, areaM2: 0, totalM2: total * cellM2, ratio: 0, seed: -1 };
+    return { mask, areaM2: 0, totalM2: total * cellM2, ratio: 0, seed: -1 };
   }
   const sx = Math.floor((start.x - g.ox) / g.cell);
   const sy = Math.floor((start.y - g.oy) / g.cell);
   if (sx < 0 || sy < 0 || sx >= g.cols || sy >= g.rows) {
-    return { mask, centres: mask, areaM2: 0, totalM2: total * cellM2, ratio: 0, seed: -1 };
+    return { mask, areaM2: 0, totalM2: total * cellM2, ratio: 0, seed: -1 };
   }
 
   const seed = idx(g, sx, sy);
@@ -266,7 +268,7 @@ export function reachableFrom(
       h: 2400,
     });
     if (near.value < radius) {
-      return { mask, centres: mask, areaM2: 0, totalM2: total * cellM2, ratio: 0, seed: -1 };
+      return { mask, areaM2: 0, totalM2: total * cellM2, ratio: 0, seed: -1 };
     }
     start.x = near.x;
     start.y = near.y;
@@ -312,7 +314,7 @@ export function reachableFrom(
 
   const areaM2 = count * cellM2;
   const totalM2 = total * cellM2;
-  return { mask: swept, centres: mask, areaM2, totalM2, ratio: totalM2 ? areaM2 / totalM2 : 0, seed: s };
+  return { mask: swept, areaM2, totalM2, ratio: totalM2 ? areaM2 / totalM2 : 0, seed: s };
 }
 
 /** The centre of the first exterior door, which is where a visitor arrives. */
@@ -397,15 +399,6 @@ export function doorClearWidth(plan: Plan, g: Grid, openingId: string): number {
   return Math.max(0, Math.min(op.width, best) - leaf);
 }
 
-/** Rectangles the door leaves sweep, for both drawing and clash detection. */
-export function swingRects(plan: Plan): { id: string; rect: Rect }[] {
-  const out: { id: string; rect: Rect }[] = [];
-  for (const op of plan.openings) {
-    const r = doorSwingRect(plan, op);
-    if (r) out.push({ id: op.id, rect: r });
-  }
-  return out;
-}
 
 // ── Widest-path routing ──────────────────────────────────────────────────────
 

@@ -10,6 +10,7 @@
 import { CATALOG, CATALOG_BY_TYPE, ROOM_TYPES } from './catalog';
 import {
   OPPOSITE,
+  SIDE_LABEL,
   SIDES,
   approachRect,
   clamp,
@@ -337,7 +338,7 @@ export function addOpening(plan: Plan, input: AddOpeningInput): OpResult<Opening
   const len = wallLength(room, side);
   if (width + 200 > len) {
     return fail(
-      `A ${width} mm opening will not fit the ${len} mm ${sideWord(side)} wall of "${room.name}".`,
+      `A ${width} mm opening will not fit the ${len} mm ${SIDE_LABEL[side]} wall of "${room.name}".`,
       `The widest that fits with jambs is ${Math.max(0, len - 200)} mm.`,
     );
   }
@@ -350,7 +351,7 @@ export function addOpening(plan: Plan, input: AddOpeningInput): OpResult<Opening
   const usable = candidates.filter((s) => s.end - s.start >= width + 100);
   if (usable.length === 0) {
     return fail(
-      `No clear run of ${width} mm on the ${sideWord(side)} wall of "${room.name}".`,
+      `No clear run of ${width} mm on the ${SIDE_LABEL[side]} wall of "${room.name}".`,
       `The longest available stretch is ${Math.max(0, ...candidates.map((s) => s.end - s.start))} mm.`,
     );
   }
@@ -363,7 +364,7 @@ export function addOpening(plan: Plan, input: AddOpeningInput): OpResult<Opening
   );
   if (preferred.length === 0 && wantsExterior) {
     return fail(
-      `The ${sideWord(side)} wall of "${room.name}" backs onto another room, so nothing there can face outdoors.`,
+      `The ${SIDE_LABEL[side]} wall of "${room.name}" backs onto another room, so nothing there can face outdoors.`,
       'Pick a side that faces outside, or drop the exterior requirement.',
     );
   }
@@ -405,7 +406,7 @@ export function addOpening(plan: Plan, input: AddOpeningInput): OpResult<Opening
   const neighbourName = seg.neighbourId ? plan.rooms.find((r) => r.id === seg.neighbourId)?.name : 'outside';
   return done(
     created,
-    `Added a ${width} mm ${input.kind} on the ${sideWord(side)} wall of "${room.name}", opening to ${neighbourName}.`,
+    `Added a ${width} mm ${input.kind} on the ${SIDE_LABEL[side]} wall of "${room.name}", opening to ${neighbourName}.`,
   );
 }
 
@@ -456,9 +457,6 @@ export function deleteOpening(plan: Plan, ref: string): OpResult<{ id: string }>
   return done({ id: op.id }, `Removed the ${op.kind}.`);
 }
 
-function sideWord(s: Side): string {
-  return { n: 'north', e: 'east', s: 'south', w: 'west' }[s];
-}
 
 // ── Furniture ────────────────────────────────────────────────────────────────
 
