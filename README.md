@@ -10,6 +10,42 @@ Built for [The WebMCP Challenge](https://webmcp.devpost.com/).
 
 ---
 
+## The WebMCP call
+
+Every tool goes through `document.modelContext.registerTool`. The registration lives in
+[`src/mcp/runtime.ts`](src/mcp/runtime.ts) and the tools themselves in
+[`src/mcp/tools.ts`](src/mcp/tools.ts) — this is one of them, unedited:
+
+```js
+document.modelContext.registerTool({
+  name: 'check_plan',
+  description:
+    'Run every accessibility, daylight, circulation and layout rule over the plan and return what fails. ' +
+    'Each finding carries the measured value, the value required, the entities involved and a concrete fix. ' +
+    'Call this after any change to see whether it helped.',
+  annotations: { title: 'Check the plan', readOnlyHint: true },
+  inputSchema: {
+    type: 'object',
+    properties: {
+      severity: { type: 'string', enum: ['error', 'warning', 'info'] },
+      rule: { type: 'string', description: 'Only this rule id, e.g. "door.clear_width".' },
+    },
+  },
+  execute: async (args) => reply(issuesForAgent(store.plan, args.severity, args.rule)),
+});
+```
+
+The runtime prefers the native `document.modelContext`, falls back to the deprecated
+`navigator.modelContext` alias, and otherwise loads the `@mcp-b/global` polyfill on demand — so the
+same page works in Chrome with the `webmcp` flag, in ChatGPT's in-app browser, and in an ordinary
+browser with no WebMCP at all.
+
+Registration is diffed against application state on every change, and each tool is registered with
+an `AbortSignal` so withdrawing one is a single `abort()`. That is what lets the tool set shrink to
+16 in read-only mode, and to 18 while a proposal is waiting for a human.
+
+---
+
 ## The problem
 
 Nearly every home is designed by someone who cannot see the thing that will make it unusable.
